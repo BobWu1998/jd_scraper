@@ -16,6 +16,9 @@ things you didn't want:
   never returned and never billed. A client-side URL check backstops it.
 - **`--preview` is free.** Blurred results, no credits consumed — the right way to
   validate a new profile before paying for it.
+- **Incremental by default.** After a profile's first run, subsequent searches ask only
+  for postings *discovered since* the last run (`discovered_at_gte`) and exclude ids
+  already stored (`job_id_not`). You don't pay again for jobs you already have. See below.
 - `limit` in each profile caps results per run; `--max-results N` overrides per run.
 - `--dry-run` prints the request body and exits. No call, no credits.
 - Runs above `JD_CONFIRM_THRESHOLD` (default 100) prompt for confirmation; `--yes` skips
@@ -24,6 +27,34 @@ things you didn't want:
   reports out-of-credits distinctly.
 - `truncated_results` is surfaced after each run, so you know when matches were withheld
   because the account ran short of credits.
+
+## Incremental fetching
+
+Deduplicating after the fetch would still cost a credit per duplicate, so already-seen
+postings are excluded *server-side*:
+
+- `discovered_at_gte` — only postings TheirStack discovered since this profile's last
+  run. `discovered_at` is the right clock here; `date_posted` can predate discovery, so
+  a job posted last week but indexed today still reaches you.
+- `job_id_not` — ids already in the database, newest first and capped at 500 so the
+  request body stays bounded.
+
+The watermark is rewound by `incremental_overlap_minutes` (default 60) so a posting
+indexed while the previous run was in flight isn't skipped. The id exclusion cleans up
+the duplicates that overlap would otherwise let back in — the two work as a pair.
+
+The first run for a profile has no watermark and fetches normally. To deliberately
+re-fetch everything:
+
+```bash
+uv run jd search --profile profiles/atlanta-ml.yml --full
+```
+
+Turn it off permanently for a profile with `incremental: false`.
+
+Worth knowing: the watermark is keyed on the **profile name** and read from the `runs`
+table. Renaming a profile resets its history, and `--no-store` runs are not recorded, so
+they don't advance it.
 
 ## Every search needs a date or company filter
 

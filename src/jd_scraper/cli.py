@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -53,15 +53,37 @@ def search(
     totals: bool = typer.Option(
         False, "--totals", help="Ask the API for total match counts. Slower."
     ),
+    full: bool = typer.Option(
+        False,
+        "--full",
+        help="Ignore the incremental watermark and re-fetch everything. Costs more.",
+    ),
 ) -> None:
     """Run a saved search against TheirStack."""
     settings = load_settings()
     prof = _load_profile(profile)
     cap = max_results if max_results is not None else prof.limit
 
+    discovered_since, exclude_ids = _incremental_window(prof, settings, disabled=full)
+
     if dry_run:
-        _print_body(prof, cap=cap, preview=preview, totals=totals)
+        _print_body(
+            prof,
+            cap=cap,
+            preview=preview,
+            totals=totals,
+            discovered_since=discovered_since,
+            exclude_ids=exclude_ids,
+        )
         return
+
+    if discovered_since:
+        console.print(
+            f"[dim]Incremental: only postings discovered since {discovered_since}"
+            f"{f', excluding {len(exclude_ids)} known id(s)' if exclude_ids else ''}.[/dim]"
+        )
+    elif prof.incremental and not full:
+        console.print("[dim]No previous run for this profile -- fetching from scratch.[/dim]")
 
     # 1 credit per job returned -- confirm before a large pull. Preview mode is free.
     if cap > settings.jd_confirm_threshold and not yes and not preview:
@@ -81,7 +103,12 @@ def search(
     run_started = datetime.now(timezone.utc).isoformat()
     try:
         body_for_log = build_request_body(
-            prof, page=0, page_size=min(prof.page_size, cap), preview=preview
+            prof,
+            page=0,
+            page_size=min(prof.page_size, cap),
+            preview=preview,
+            discovered_since=discovered_since,
+            exclude_ids=exclude_ids,
         )
     except MissingMandatoryFilterError as exc:
         console.print(f"[red]{exc}[/red]")
@@ -101,6 +128,8 @@ def search(
                 max_results=cap,
                 preview=preview,
                 include_total_results=totals,
+                discovered_since=discovered_since,
+                exclude_ids=exclude_ids,
                 on_page=_progress,
             )
     except OutOfCreditsError as exc:
@@ -283,12 +312,47 @@ def _finish_profile(prof: SearchProfile, out_path: str) -> None:
     )
 
 
+def _incremental_window(
+    prof: SearchProfile, settings, *, disabled: bool = False
+) -> tuple[str | None, list[int]]:
+    """Work out what this profile has already seen.
+
+    Returns (discovered_since, exclude_ids). The timestamp is rewound by the
+    profile's overlap so a posting discovered mid-run is not skipped; the id list
+    removes the duplicates that overlap would otherwise let back in.
+    """
+    if disabled or not prof.incremental:
+        return None, []
+
+    db_path = Path(settings.jd_db_path)
+    if not db_path.exists():
+        return None, []
+
+    with Store(db_path) as store:
+        last_run = store.last_run_at(prof.name)
+        if not last_run:
+            return None, []
+        try:
+            last = datetime.fromisoformat(last_run)
+        except ValueError:
+            return None, []
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+
+        since = last - timedelta(minutes=prof.incremental_overlap_minutes)
+        # The API documents discovered_at_* as UTC, so send a bare UTC timestamp.
+        stamp = since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
+        return stamp, store.known_job_ids(since=since.isoformat())
+
+
 def _print_body(
     prof: SearchProfile,
     *,
     cap: int | None = None,
     preview: bool = False,
     totals: bool = False,
+    discovered_since: str | None = None,
+    exclude_ids: list[int] | None = None,
 ) -> None:
     """Preview the request body, which also validates the profile is searchable."""
     cap = cap if cap is not None else prof.limit
@@ -299,6 +363,8 @@ def _print_body(
             page_size=min(prof.page_size, cap),
             preview=preview or None,
             include_total_results=totals or None,
+            discovered_since=discovered_since,
+            exclude_ids=exclude_ids,
         )
     except MissingMandatoryFilterError as exc:
         console.print(f"[red]{exc}[/red]")

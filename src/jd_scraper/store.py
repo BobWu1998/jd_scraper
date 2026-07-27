@@ -181,3 +181,38 @@ class Store:
 
     def count(self) -> int:
         return self.conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]
+
+    # --- incremental fetching -------------------------------------------------
+
+    def last_run_at(self, profile_name: str) -> str | None:
+        """When this profile last ran, or None if it never has."""
+        row = self.conn.execute(
+            "SELECT MAX(started_at) FROM runs WHERE profile = ?", (profile_name,)
+        ).fetchone()
+        return row[0] if row and row[0] else None
+
+    def known_job_ids(self, *, since: str | None = None, limit: int = 500) -> list[int]:
+        """IDs already stored, newest first.
+
+        Bounded by `limit` because these go into the request body as `job_id_not`,
+        and an unbounded list would grow the payload without end. Non-numeric ids
+        are skipped -- the API's job_id_not takes integers.
+        """
+        if since:
+            rows = self.conn.execute(
+                "SELECT id FROM jobs WHERE first_seen_at >= ? "
+                "ORDER BY first_seen_at DESC LIMIT ?",
+                (since, limit),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT id FROM jobs ORDER BY first_seen_at DESC LIMIT ?", (limit,)
+            ).fetchall()
+
+        ids: list[int] = []
+        for row in rows:
+            try:
+                ids.append(int(row[0]))
+            except (TypeError, ValueError):
+                continue
+        return ids

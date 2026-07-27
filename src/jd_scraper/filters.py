@@ -50,8 +50,15 @@ def build_request_body(
     page_size: int | None = None,
     include_total_results: bool | None = None,
     preview: bool | None = None,
+    discovered_since: str | None = None,
+    exclude_ids: list[int] | None = None,
 ) -> dict[str, Any]:
-    """Map a profile onto a request body for one page of results."""
+    """Map a profile onto a request body for one page of results.
+
+    `discovered_since` and `exclude_ids` drive incremental fetching: they push
+    already-seen postings out of the result set server-side, so credits are not
+    spent re-fetching rows already in the database.
+    """
     body: dict[str, Any] = {
         "page": page,
         "limit": page_size if page_size is not None else profile.page_size,
@@ -121,6 +128,14 @@ def build_request_body(
     domains = profile.source_domains()
     if domains:
         body["url_domain_or"] = domains
+
+    # --- incremental fetching --------------------------------------------------
+    # discovered_at is when TheirStack found the posting, which is the right clock
+    # for "what is new since I last looked" -- date_posted can predate discovery.
+    if discovered_since:
+        body["discovered_at_gte"] = discovered_since
+    if exclude_ids:
+        body["job_id_not"] = list(exclude_ids)
 
     # --- request modes ---------------------------------------------------------
     if include_total_results is None:

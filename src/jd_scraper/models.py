@@ -97,6 +97,16 @@ class SearchProfile(BaseModel):
 
     page_size: int = 25
 
+    incremental: bool = True
+    """Ask the API only for postings discovered since this profile's last run, and
+    exclude ids already stored. Avoids paying credits for rows you already have.
+    Override for one run with `jd search --full`."""
+
+    incremental_overlap_minutes: int = 60
+    """Rewind the "since" timestamp by this much so a posting discovered while the
+    previous run was in flight is not skipped. The id exclusion covers the
+    duplicates this overlap would otherwise reintroduce."""
+
     include_total_results: bool = False
     """Ask the API for total counts. Significantly slower -- it reads the whole
     dataset -- so enable it for a first request, not for every page."""

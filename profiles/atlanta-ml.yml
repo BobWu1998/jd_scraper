@@ -45,4 +45,10 @@ page_size: 10
 
 preview: true
 
+# After the first run, only ask for postings discovered since last time, and
+# exclude ids already stored -- so repeat runs don't pay for jobs you have.
+# `jd search --full` overrides this for one run.
+incremental: true
+incremental_overlap_minutes: 60
+
 extra: {}
