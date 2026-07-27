@@ -45,6 +45,9 @@ cp .env.example .env
 ## Usage
 
 ```bash
+# 0. Build a search profile by answering prompts (no API call, no credits).
+uv run jd profile new
+
 # 1. Capture the real API schema. Do this before anything else.
 uv run jd probe
 
@@ -68,8 +71,20 @@ Useful flags on `search`: `--only-new` (just this run's new postings), `--no-sto
 
 ## Search profiles
 
-Searches are YAML files in `profiles/`. See `profiles/example.yml` for every supported
-key. The essentials:
+Searches are YAML files in `profiles/`. Build and revise them interactively:
+
+```bash
+uv run jd profile new                      # answer prompts -> writes profiles/<name>.yml
+uv run jd profile edit profiles/ml-us.yml  # current values are the defaults; Enter keeps them
+uv run jd profile show profiles/ml-us.yml  # print the profile and the body it would send
+```
+
+The wizard never calls the API, so iterating on criteria is free. Each command prints the
+resulting request body, which is the fastest way to see what a change actually does.
+Filters it doesn't prompt for (`description_contains`, `companies`, `extra`) are carried
+through untouched when editing, so hand-written YAML is never silently dropped.
+
+See `profiles/example.yml` for every supported key. The essentials:
 
 ```yaml
 name: ml-engineer-us
@@ -100,6 +115,7 @@ since any request-side source filter is unverified.
 | `src/jd_scraper/client.py` | HTTP, retries, pagination, credit cap |
 | `src/jd_scraper/store.py` | SQLite schema, upsert, dedup |
 | `src/jd_scraper/export.py` | CSV / JSONL writers |
+| `src/jd_scraper/wizard.py` | Interactive profile builder / editor |
 | `src/jd_scraper/cli.py` | Typer commands |
 
 ## Tests

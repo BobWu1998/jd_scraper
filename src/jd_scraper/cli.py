@@ -17,8 +17,11 @@ from .export import write_csv, write_jsonl
 from .filters import BODY_FIELD_NOTES, build_request_body
 from .models import SearchProfile
 from .store import Store
+from .wizard import build_profile_interactively, profile_to_yaml, write_profile
 
 app = typer.Typer(help="Pull LinkedIn job postings via the TheirStack API.", no_args_is_help=True)
+profile_app = typer.Typer(help="Create and edit search profiles.", no_args_is_help=True)
+app.add_typer(profile_app, name="profile")
 console = Console()
 
 
@@ -200,6 +203,57 @@ def probe(
     path.write_text(json.dumps(snapshot, indent=2, default=str), encoding="utf-8")
     console.print(f"[green]Wrote {path}[/green]")
     console.print("[dim]Review it, then correct build_request_body() in filters.py.[/dim]")
+
+
+@profile_app.command("new")
+def profile_new(
+    out: Optional[str] = typer.Option(None, "--out", "-o", help="Where to write the YAML."),
+) -> None:
+    """Build a new search profile by answering prompts."""
+    prof = build_profile_interactively()
+    _finish_profile(prof, out or f"profiles/{prof.name}.yml")
+
+
+@profile_app.command("edit")
+def profile_edit(
+    path: str = typer.Argument(..., help="Profile YAML to edit."),
+    out: Optional[str] = typer.Option(None, "--out", "-o", help="Write elsewhere instead."),
+) -> None:
+    """Revise an existing profile's criteria, keeping current values as defaults."""
+    base = _load_profile(path)
+    prof = build_profile_interactively(base)
+    _finish_profile(prof, out or path)
+
+
+@profile_app.command("show")
+def profile_show(
+    path: str = typer.Argument(..., help="Profile YAML to inspect."),
+) -> None:
+    """Show a profile and the request body it produces. No API call."""
+    prof = _load_profile(path)
+    console.print(profile_to_yaml(prof))
+    _print_body(prof)
+
+
+def _finish_profile(prof: SearchProfile, out_path: str) -> None:
+    written = write_profile(prof, out_path)
+    console.print(f"\n[green]Wrote {written}[/green]")
+    _print_body(prof)
+    console.print(
+        f"\n[dim]Run it with:[/dim] jd search --profile {written} --max-results 5"
+        f"\n[dim]Revise it with:[/dim] jd profile edit {written}"
+    )
+
+
+def _print_body(prof: SearchProfile) -> None:
+    """Preview the request body, which also validates the profile is searchable."""
+    try:
+        body = build_request_body(prof, page=0, page_size=min(prof.page_size, prof.limit))
+    except Exception as exc:
+        console.print(f"[yellow]This profile is not searchable yet:[/yellow] {exc}")
+        return
+    console.print("\n[bold]Request body it would send:[/bold]")
+    console.print_json(format_body(body))
 
 
 def _render(rows) -> None:
