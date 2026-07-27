@@ -1,0 +1,17 @@
+.env
+*.db
+*.sqlite
+*.sqlite3
+exports/
+docs/api-snapshot.json
+
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.ruff_cache/
+uv.lock

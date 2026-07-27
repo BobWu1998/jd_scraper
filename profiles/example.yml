@@ -1,0 +1,46 @@
+# Example search profile. Copy and edit.
+# Run `jd search --profile profiles/example.yml --dry-run` to see the request body
+# it produces without calling the API or spending credits.
+
+name: ml-engineer-us
+
+titles:
+  - "Machine Learning Engineer"
+  - "ML Engineer"
+title_exclude:
+  - "Intern"
+  - "Manager"
+
+# "post time" -- only postings from the last N days
+posted_within_days: 7
+
+locations:
+  countries: ["US"]
+  patterns:
+    - "San Francisco"
+    - "New York"
+
+remote: true
+
+seniority:
+  - mid_level
+  - senior
+
+min_salary_usd: 150000
+
+companies_exclude:
+  - "Some Staffing Agency"
+
+sources:
+  # Client-side enforced: drops anything whose URL is not linkedin.com.
+  # Set false to accept postings from every board TheirStack aggregates.
+  linkedin_only: true
+
+# Hard ceiling on results fetched per run. TheirStack bills per job returned,
+# so keep this deliberately small until you trust the filters.
+limit: 50
+page_size: 25
+
+# Raw pass-through, merged last into the request body. Use this for any TheirStack
+# filter this tool does not model yet, or to override a mapping.
+extra: {}

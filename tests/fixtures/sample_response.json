@@ -1,0 +1,46 @@
+{
+  "metadata": {
+    "total_results": 3,
+    "truncated_results": 3,
+    "total_companies": 3
+  },
+  "data": [
+    {
+      "id": "job-1",
+      "job_title": "Machine Learning Engineer",
+      "company": "Acme AI",
+      "url": "https://www.linkedin.com/jobs/view/1111",
+      "final_url": "https://acme.example/careers/1111",
+      "location": "San Francisco, CA",
+      "country_code": "US",
+      "remote": true,
+      "date_posted": "2026-07-20",
+      "discovered_at": "2026-07-20T10:00:00Z",
+      "seniority": "senior",
+      "min_annual_salary_usd": 180000,
+      "max_annual_salary_usd": 240000,
+      "an_unexpected_field": "must not crash the parser"
+    },
+    {
+      "id": "job-2",
+      "job_title": "ML Engineer",
+      "company": "Globex",
+      "url": "https://boards.greenhouse.io/globex/jobs/2222",
+      "location": "New York, NY",
+      "country_code": "US",
+      "remote": false,
+      "date_posted": "2026-07-19",
+      "seniority": "mid_level"
+    },
+    {
+      "id": "job-3",
+      "job_title": "Machine Learning Engineer II",
+      "company": "Initech",
+      "source_url": "https://LinkedIn.com/jobs/view/3333",
+      "location": "Remote, US",
+      "country_code": "US",
+      "remote": true,
+      "date_posted": "2026-07-18"
+    }
+  ]
+}
