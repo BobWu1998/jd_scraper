@@ -11,10 +11,10 @@ import typer
 from rich.console import Console
 from rich.table import Table
 
-from .client import TheirStackClient, TheirStackError, format_body
+from .client import OutOfCreditsError, TheirStackClient, TheirStackError, format_body
 from .config import load_settings
 from .export import write_csv, write_jsonl
-from .filters import BODY_FIELD_NOTES, build_request_body
+from .filters import MissingMandatoryFilterError, build_request_body
 from .models import SearchProfile
 from .store import Store
 from .wizard import build_profile_interactively, profile_to_yaml, write_profile
@@ -47,6 +47,12 @@ def search(
     ),
     no_store: bool = typer.Option(False, "--no-store", help="Do not write to the database."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the credit confirmation prompt."),
+    preview: bool = typer.Option(
+        False, "--preview", help="Blurred, credit-free results. Good for testing filters."
+    ),
+    totals: bool = typer.Option(
+        False, "--totals", help="Ask the API for total match counts. Slower."
+    ),
 ) -> None:
     """Run a saved search against TheirStack."""
     settings = load_settings()
@@ -54,14 +60,11 @@ def search(
     cap = max_results if max_results is not None else prof.limit
 
     if dry_run:
-        body = build_request_body(prof, page=0, page_size=min(prof.page_size, cap))
-        console.print(f"[bold]Request body[/bold] (page 0 of up to {cap} results):")
-        console.print_json(format_body(body))
-        console.print(f"\n[dim]{BODY_FIELD_NOTES}[/dim]")
+        _print_body(prof, cap=cap, preview=preview, totals=totals)
         return
 
-    # TheirStack bills per job returned -- confirm before a large pull.
-    if cap > settings.jd_confirm_threshold and not yes:
+    # 1 credit per job returned -- confirm before a large pull. Preview mode is free.
+    if cap > settings.jd_confirm_threshold and not yes and not preview:
         confirmed = typer.confirm(
             f"This will request up to {cap} jobs, which consumes TheirStack credits. Continue?"
         )
@@ -76,7 +79,13 @@ def search(
         raise typer.Exit(2)
 
     run_started = datetime.now(timezone.utc).isoformat()
-    body_for_log = build_request_body(prof, page=0, page_size=min(prof.page_size, cap))
+    try:
+        body_for_log = build_request_body(
+            prof, page=0, page_size=min(prof.page_size, cap), preview=preview
+        )
+    except MissingMandatoryFilterError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(2)
 
     def _progress(page: int, count: int) -> None:
         console.print(f"[dim]page {page}: {count} results[/dim]")
@@ -87,14 +96,43 @@ def search(
             base_url=settings.theirstack_base_url,
             timeout=settings.jd_timeout_seconds,
         ) as client:
-            jobs, metadata = client.search(prof, max_results=cap, on_page=_progress)
+            jobs, metadata = client.search(
+                prof,
+                max_results=cap,
+                preview=preview,
+                include_total_results=totals,
+                on_page=_progress,
+            )
+    except OutOfCreditsError as exc:
+        console.print(f"[red]Out of credits:[/red] {exc}")
+        console.print("[dim]Re-run with --preview for free, blurred results.[/dim]")
+        raise typer.Exit(1)
     except TheirStackError as exc:
         console.print(f"[red]API call failed:[/red] {exc}")
-        console.print(f"\n[dim]{BODY_FIELD_NOTES}[/dim]")
         raise typer.Exit(1)
 
+    billed = metadata.get("billed_results", 0)
+    if preview:
+        console.print(f"[dim]Preview mode: {billed} blurred results, no credits used.[/dim]")
+    else:
+        console.print(f"[dim]{billed} jobs returned = {billed} credits used.[/dim]")
+
     if prof.sources.linkedin_only:
-        console.print(f"[dim]LinkedIn-only filter kept {len(jobs)} postings.[/dim]")
+        discarded = billed - len(jobs)
+        note = f"LinkedIn-only filter kept {len(jobs)} of {billed}."
+        if discarded > 0:
+            note += (
+                f" {discarded} non-LinkedIn result(s) still cost credits -- the"
+                " server-side url_domain_or filter should normally prevent this."
+            )
+        console.print(f"[dim]{note}[/dim]")
+
+    truncated = metadata.get("truncated_results") or 0
+    if truncated:
+        console.print(
+            f"[yellow]{truncated} further match(es) were withheld because the account "
+            f"lacks credits to fetch them.[/yellow]"
+        )
 
     total_new = 0
     if not no_store:
@@ -245,14 +283,30 @@ def _finish_profile(prof: SearchProfile, out_path: str) -> None:
     )
 
 
-def _print_body(prof: SearchProfile) -> None:
+def _print_body(
+    prof: SearchProfile,
+    *,
+    cap: int | None = None,
+    preview: bool = False,
+    totals: bool = False,
+) -> None:
     """Preview the request body, which also validates the profile is searchable."""
+    cap = cap if cap is not None else prof.limit
     try:
-        body = build_request_body(prof, page=0, page_size=min(prof.page_size, prof.limit))
+        body = build_request_body(
+            prof,
+            page=0,
+            page_size=min(prof.page_size, cap),
+            preview=preview or None,
+            include_total_results=totals or None,
+        )
+    except MissingMandatoryFilterError as exc:
+        console.print(f"[red]{exc}[/red]")
+        return
     except Exception as exc:
         console.print(f"[yellow]This profile is not searchable yet:[/yellow] {exc}")
         return
-    console.print("\n[bold]Request body it would send:[/bold]")
+    console.print(f"\n[bold]Request body[/bold] (page 0 of up to {cap} results):")
     console.print_json(format_body(body))
 
 

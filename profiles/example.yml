@@ -1,9 +1,12 @@
-# Example search profile. Copy and edit.
-# Run `jd search --profile profiles/example.yml --dry-run` to see the request body
-# it produces without calling the API or spending credits.
+# Example search profile. Copy and edit, or build one with `jd profile new`.
+# `jd search --profile profiles/example.yml --dry-run` shows the request body it
+# produces, without calling the API or spending credits.
 
 name: ml-engineer-us
 
+# Keyword matching, case-insensitive: every word in a pattern must appear in the
+# title, in any order. "machine learning engineer" therefore also matches
+# "Senior Machine Learning Engineer, Platform".
 titles:
   - "Machine Learning Engineer"
   - "ML Engineer"
@@ -11,36 +14,61 @@ title_exclude:
   - "Intern"
   - "Manager"
 
-# "post time" -- only postings from the last N days
+# REQUIRED: the API rejects any search without one of posted_within_days,
+# posted_after, posted_before or companies. A title or location filter alone
+# is not enough.
 posted_within_days: 7
+# posted_after: "2026-07-01"    # alternative: explicit ISO date range
+# posted_before: "2026-07-15"
 
 locations:
   countries: ["US"]
   patterns:
     - "San Francisco"
     - "New York"
+  # ids: [5391959]              # geoname IDs -- more precise than patterns
 
 remote: true
 
+# One of: c_level, staff, senior, junior, mid_level
 seniority:
   - mid_level
   - senior
+
+# One of: full_time, part_time, temporary, internship, contract, freelance,
+# co_founder, apprenticeship, seasonal, volunteer, other
+employment_types:
+  - full_time
 
 min_salary_usd: 150000
 
 companies_exclude:
   - "Some Staffing Agency"
+exclude_recruiting_agencies: true   # direct employers only
+
+# Whole-word match: "quality" will not match "inequality".
+description_contains:
+  - "pytorch"
+# description_pattern: ["(?i)llm"]  # regex alternative
+# description_exclude: ["security clearance"]
 
 sources:
-  # Client-side enforced: drops anything whose URL is not linkedin.com.
-  # Set false to accept postings from every board TheirStack aggregates.
+  # Applied server-side via url_domain_or, so non-LinkedIn postings are never
+  # returned and never billed. A client-side URL check backstops it.
   linkedin_only: true
+  # domains: ["greenhouse.io"]      # additional domains to accept
 
-# Hard ceiling on results fetched per run. TheirStack bills per job returned,
-# so keep this deliberately small until you trust the filters.
+# Hard ceiling on results fetched per run. 1 credit is billed per job returned,
+# so keep this small until you trust the filters.
 limit: 50
 page_size: 25
 
-# Raw pass-through, merged last into the request body. Use this for any TheirStack
-# filter this tool does not model yet, or to override a mapping.
+# Blurred results, free of charge. Good for validating filters before paying.
+preview: false
+
+# Total match counts. Significantly slower -- it reads the whole dataset.
+include_total_results: false
+
+# Raw pass-through, merged last into the request body. Use for any API filter
+# this tool does not model yet, or to override a mapping.
 extra: {}

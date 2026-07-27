@@ -1,43 +1,46 @@
-"""Translate a SearchProfile into a TheirStack request body, and enforce LinkedIn-only.
+"""Translate a SearchProfile into a TheirStack request body.
 
-IMPORTANT: the request-body field names below are unverified -- they were written
-without access to TheirStack's live API or OpenAPI spec. Run `jd probe` against the
-real API and correct BODY_FIELD_NOTES / build_request_body from its output.
+Field names here are verified against the published API reference for
+POST /v1/jobs/search (job search endpoint).
 
-The `extra` pass-through on SearchProfile exists precisely so a wrong guess here does
-not block you: any filter can be supplied raw from the profile YAML.
+Two API rules drive the design:
+
+1. At least one of MANDATORY_FILTERS must be present or the request fails. That is
+   validated locally, before the request leaves the machine.
+2. The endpoint bills 1 credit per job *returned*, so filtering happens server-side
+   wherever possible -- notably `url_domain_or` for LinkedIn-only searches, which
+   avoids paying for postings we would otherwise discard on arrival.
 """
 
 from __future__ import annotations
 
 from typing import Any
+from urllib.parse import urlparse
 
 from .models import Job, SearchProfile
 
-LINKEDIN_URL_MARKER = "linkedin.com"
-LINKEDIN_SOURCE_MARKER = "linkedin"
+LINKEDIN_DOMAIN = "linkedin.com"
 
-BODY_FIELD_NOTES = """\
-Assumed TheirStack /v1/jobs/search body fields (UNVERIFIED):
-  job_title_or, job_title_not          <- titles, title_exclude
-  posted_at_max_age_days               <- posted_within_days
-  job_country_code_or                  <- locations.countries
-  job_location_pattern_or              <- locations.patterns
-  remote                               <- remote
-  job_seniority_or                     <- seniority
-  min_salary_usd / max_salary_usd      <- min/max_salary_usd
-  company_name_or / company_name_not   <- companies / companies_exclude
-  job_description_pattern_or           <- description_contains
-  page, limit, order_by
-"""
+# The API rejects a search unless at least one of these is set, for performance reasons.
+MANDATORY_FILTERS = (
+    "posted_at_max_age_days",
+    "posted_at_gte",
+    "posted_at_lte",
+    "company_domain_or",
+    "company_linkedin_url_or",
+    "company_name_or",
+)
+
+SENIORITY_CHOICES = ("c_level", "staff", "senior", "junior", "mid_level")
+
+ORDER_BY_DEFAULT = [
+    {"field": "date_posted", "desc": True},
+    {"field": "discovered_at", "desc": True},
+]
 
 
-class EmptyFilterError(ValueError):
-    """Raised when a profile would produce a search with no filters at all.
-
-    TheirStack rejects unfiltered searches, and an accidental match-everything query
-    against a per-result-billed API is worth catching before it leaves the machine.
-    """
+class MissingMandatoryFilterError(ValueError):
+    """The profile lacks every filter the API requires."""
 
 
 def build_request_body(
@@ -45,78 +48,136 @@ def build_request_body(
     *,
     page: int = 0,
     page_size: int | None = None,
+    include_total_results: bool | None = None,
+    preview: bool | None = None,
 ) -> dict[str, Any]:
     """Map a profile onto a request body for one page of results."""
     body: dict[str, Any] = {
         "page": page,
         "limit": page_size if page_size is not None else profile.page_size,
-        "order_by": [{"field": "date_posted", "desc": True}],
+        "order_by": ORDER_BY_DEFAULT,
     }
 
+    # --- job title -------------------------------------------------------------
+    # job_title_or is keyword-based, not exact: every word in a pattern must appear
+    # in the title, in any order, case-insensitively. "machine learning engineer"
+    # therefore also matches "Senior Machine Learning Engineer, Platform".
     if profile.titles:
         body["job_title_or"] = list(profile.titles)
     if profile.title_exclude:
         body["job_title_not"] = list(profile.title_exclude)
+    if profile.title_pattern:
+        body["job_title_pattern_or"] = list(profile.title_pattern)
 
+    # --- posting date ----------------------------------------------------------
     if profile.posted_within_days is not None:
         body["posted_at_max_age_days"] = profile.posted_within_days
+    if profile.posted_after:
+        body["posted_at_gte"] = profile.posted_after
+    if profile.posted_before:
+        body["posted_at_lte"] = profile.posted_before
 
+    # --- location --------------------------------------------------------------
     if profile.locations.countries:
         body["job_country_code_or"] = list(profile.locations.countries)
     if profile.locations.patterns:
+        # Deprecated upstream in favour of job_location_or with geoname IDs, but it
+        # needs no catalog lookup so it stays the ergonomic default.
         body["job_location_pattern_or"] = list(profile.locations.patterns)
+    if profile.locations.ids:
+        body["job_location_or"] = [{"id": i} for i in profile.locations.ids]
 
     if profile.remote is not None:
         body["remote"] = profile.remote
 
+    # --- role attributes -------------------------------------------------------
     if profile.seniority:
         body["job_seniority_or"] = list(profile.seniority)
-
+    if profile.employment_types:
+        body["employment_statuses_or"] = list(profile.employment_types)
     if profile.min_salary_usd is not None:
         body["min_salary_usd"] = profile.min_salary_usd
     if profile.max_salary_usd is not None:
         body["max_salary_usd"] = profile.max_salary_usd
 
+    # --- company ---------------------------------------------------------------
     if profile.companies:
         body["company_name_or"] = list(profile.companies)
     if profile.companies_exclude:
         body["company_name_not"] = list(profile.companies_exclude)
+    if profile.exclude_recruiting_agencies:
+        body["company_type"] = "direct_employer"
 
+    # --- description -----------------------------------------------------------
     if profile.description_contains:
-        body["job_description_pattern_or"] = list(profile.description_contains)
+        # Whole-word match, so "quality" does not hit "inequality".
+        body["job_description_contains_or"] = list(profile.description_contains)
+    if profile.description_pattern:
+        body["job_description_pattern_or"] = list(profile.description_pattern)
+    if profile.description_exclude:
+        body["job_description_contains_not"] = list(profile.description_exclude)
 
-    _assert_has_filters(body)
+    # --- source ----------------------------------------------------------------
+    domains = profile.source_domains()
+    if domains:
+        body["url_domain_or"] = domains
 
-    # Pass-through wins over everything above, so a wrong guess can always be overridden.
+    # --- request modes ---------------------------------------------------------
+    if include_total_results is None:
+        include_total_results = profile.include_total_results
+    if include_total_results:
+        # Costs a full-dataset read, so it is off unless explicitly asked for.
+        body["include_total_results"] = True
+
+    if preview is None:
+        preview = profile.preview
+    if preview:
+        # Blurred results are free -- no credits consumed.
+        body["blur_company_data"] = True
+
+    # Pass-through wins over everything above.
     body.update(profile.extra)
+
+    _assert_mandatory_filter(body)
     return body
 
 
-def _assert_has_filters(body: dict[str, Any]) -> None:
-    scaffolding = {"page", "limit", "order_by"}
-    if not (set(body) - scaffolding):
-        raise EmptyFilterError(
-            "This profile has no filters -- it would request every job in the database. "
-            "Set at least one of: titles, posted_within_days, locations, companies, "
-            "seniority, or a salary bound."
-        )
+def _assert_mandatory_filter(body: dict[str, Any]) -> None:
+    if any(body.get(field) not in (None, [], "") for field in MANDATORY_FILTERS):
+        return
+    raise MissingMandatoryFilterError(
+        "TheirStack requires at least one of these filters, and this profile sets none:\n"
+        "  posted_within_days  (-> posted_at_max_age_days)\n"
+        "  posted_after        (-> posted_at_gte)\n"
+        "  posted_before       (-> posted_at_lte)\n"
+        "  companies           (-> company_name_or)\n"
+        "Add one -- posted_within_days: 7 is the usual choice. A title or location "
+        "filter alone is not enough; the API rejects it for performance reasons."
+    )
+
+
+def domain_of(url: str | None) -> str | None:
+    if not url:
+        return None
+    host = urlparse(url if "//" in url else f"//{url}").netloc.lower()
+    return host[4:] if host.startswith("www.") else host or None
 
 
 def is_linkedin(job: Job) -> bool:
-    """True if the posting looks LinkedIn-sourced.
+    """True if the posting came from LinkedIn.
 
-    Checked across every url-ish field because which one carries the origin is not
-    verified. This client-side check is what actually enforces linkedin_only -- any
-    request-side source filter is a best-effort optimisation on top.
+    The response has no `source` field, so this reads the URL fields. It backstops
+    the server-side `url_domain_or` filter rather than replacing it.
     """
-    urls = [job.url, job.final_url, job.source_url]
-    if any(LINKEDIN_URL_MARKER in u.lower() for u in urls if u):
-        return True
-    # A `source`/board field is likely a bare name ("linkedin"), not a domain.
-    return bool(job.source) and LINKEDIN_SOURCE_MARKER in job.source.lower()
+    for url in (job.url, job.source_url, job.final_url):
+        host = domain_of(url)
+        if host and (host == LINKEDIN_DOMAIN or host.endswith(f".{LINKEDIN_DOMAIN}")):
+            return True
+    return False
 
 
 def apply_source_filter(jobs: list[Job], profile: SearchProfile) -> list[Job]:
+    """Client-side safety net. The server-side filter should make this a no-op."""
     if not profile.sources.linkedin_only:
         return jobs
     return [j for j in jobs if is_linkedin(j)]

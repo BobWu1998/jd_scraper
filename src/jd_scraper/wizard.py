@@ -13,9 +13,7 @@ from typing import Any
 import typer
 import yaml
 
-from .models import SearchProfile
-
-SENIORITY_CHOICES = ["junior", "mid_level", "senior", "staff", "c_level"]
+from .models import SENIORITY_CHOICES, SearchProfile
 
 
 def _ask_list(prompt: str, *, example: str = "", current: list[str] | None = None) -> list[str]:
@@ -87,7 +85,9 @@ def build_profile_interactively(base: SearchProfile | None = None) -> SearchProf
     )
     unknown = [s for s in seniority if s not in SENIORITY_CHOICES]
     if unknown:
-        typer.echo(f"  Note: {', '.join(unknown)} is not a known level; keeping it anyway.")
+        # The API only accepts the documented enum, so drop rather than pass through.
+        typer.echo(f"  Dropping unknown level(s): {', '.join(unknown)}")
+        seniority = [s for s in seniority if s in SENIORITY_CHOICES]
 
     min_salary = _ask_int("Minimum USD salary", default=base.min_salary_usd)
 
@@ -95,6 +95,10 @@ def build_profile_interactively(base: SearchProfile | None = None) -> SearchProf
         "Companies to exclude",
         example="Some Staffing Agency",
         current=base.companies_exclude,
+    )
+    exclude_agencies = typer.confirm(
+        "Exclude recruiting agencies (direct employers only)?",
+        default=base.exclude_recruiting_agencies,
     )
 
     linkedin_only = typer.confirm(
@@ -112,13 +116,23 @@ def build_profile_interactively(base: SearchProfile | None = None) -> SearchProf
         "locations": {"countries": countries, "patterns": patterns},
         "seniority": seniority,
         "companies_exclude": companies_exclude,
-        "sources": {"linkedin_only": linkedin_only},
+        "exclude_recruiting_agencies": exclude_agencies,
+        "sources": {"linkedin_only": linkedin_only, "domains": base.sources.domains},
         "limit": limit,
         "page_size": min(base.page_size, limit),
         # Not prompted for -- carried through untouched so editing never silently
         # drops filters that were hand-written into the YAML.
         "companies": base.companies,
+        "title_pattern": base.title_pattern,
+        "posted_after": base.posted_after,
+        "posted_before": base.posted_before,
+        "employment_types": base.employment_types,
+        "max_salary_usd": base.max_salary_usd,
         "description_contains": base.description_contains,
+        "description_exclude": base.description_exclude,
+        "description_pattern": base.description_pattern,
+        "include_total_results": base.include_total_results,
+        "preview": base.preview,
         "extra": base.extra,
     }
     if posted_within_days is not None:
@@ -132,19 +146,31 @@ def build_profile_interactively(base: SearchProfile | None = None) -> SearchProf
     return SearchProfile.model_validate(data)
 
 
+# Written only when enabled; False is the default and means "no filter".
+_OFF_BY_DEFAULT_FLAGS = {"exclude_recruiting_agencies", "include_total_results", "preview"}
+_ALWAYS_KEEP = {"name", "limit", "page_size", "sources", "extra"}
+
+
 def profile_to_yaml(profile: SearchProfile) -> str:
     data = profile.model_dump(exclude_defaults=False)
     # Drop empty filters so the written file shows only what is actually constraining.
     cleaned: dict[str, Any] = {}
     for key, value in data.items():
-        if key in {"name", "limit", "page_size", "sources", "extra"}:
-            cleaned[key] = value
-        elif value in (None, [], {}):
-            continue
+        if key in _ALWAYS_KEEP:
+            if key == "sources":
+                cleaned[key] = {k: v for k, v in value.items() if v or k == "linkedin_only"}
+            else:
+                cleaned[key] = value
+        elif key in _OFF_BY_DEFAULT_FLAGS:
+            if value:
+                cleaned[key] = value
         elif key == "locations":
             inner = {k: v for k, v in value.items() if v}
             if inner:
                 cleaned[key] = inner
+        elif value is None or value == [] or value == {}:
+            # `remote: false` is meaningful (non-remote only), so only None/empty go.
+            continue
         else:
             cleaned[key] = value
     return yaml.safe_dump(cleaned, sort_keys=False, allow_unicode=True)

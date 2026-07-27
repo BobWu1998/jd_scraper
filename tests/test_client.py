@@ -30,8 +30,9 @@ def test_sends_bearer_auth_and_stops_at_end(sample_response, profile_dict):
     assert seen["auth"] == "Bearer test-key"
     # 3 results on a page of 5 means a short page -> stop after one request.
     assert metadata["total_results"] == 3
+    assert metadata["billed_results"] == 3, "the cap counts what the API billed for"
     # linkedin_only defaults to True, so the greenhouse posting is dropped.
-    assert [j.id for j in jobs] == ["job-1", "job-3"]
+    assert [j.id for j in jobs] == [1111, 3333]
 
 
 def test_paginates_until_cap(profile_dict):

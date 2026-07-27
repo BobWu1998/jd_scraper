@@ -1,46 +1,63 @@
 {
   "metadata": {
     "total_results": 3,
-    "truncated_results": 3,
-    "total_companies": 3
+    "truncated_results": 0,
+    "total_companies": 3,
+    "truncated_companies": 0
   },
   "data": [
     {
-      "id": "job-1",
-      "job_title": "Machine Learning Engineer",
+      "id": 1111,
+      "job_title": "Senior Machine Learning Engineer",
       "company": "Acme AI",
+      "company_object": { "id": "c1", "name": "Acme AI Inc", "domain": "acme.example" },
       "url": "https://www.linkedin.com/jobs/view/1111",
+      "source_url": "https://www.linkedin.com/jobs/view/1111",
       "final_url": "https://acme.example/careers/1111",
-      "location": "San Francisco, CA",
+      "location": "San Francisco",
+      "short_location": "San Francisco, CA",
+      "long_location": "San Francisco, CA 94105",
+      "country": "United States",
       "country_code": "US",
       "remote": true,
+      "hybrid": false,
       "date_posted": "2026-07-20",
       "discovered_at": "2026-07-20T10:00:00Z",
       "seniority": "senior",
+      "employment_statuses": ["full_time"],
       "min_annual_salary_usd": 180000,
       "max_annual_salary_usd": 240000,
+      "salary_currency": "USD",
+      "technology_slugs": ["pytorch"],
       "an_unexpected_field": "must not crash the parser"
     },
     {
-      "id": "job-2",
+      "id": 2222,
       "job_title": "ML Engineer",
       "company": "Globex",
+      "company_object": { "id": "c2", "name": "Globex" },
       "url": "https://boards.greenhouse.io/globex/jobs/2222",
-      "location": "New York, NY",
+      "source_url": "https://boards.greenhouse.io/globex/jobs/2222",
+      "location": "New York",
+      "short_location": "New York, NY",
       "country_code": "US",
       "remote": false,
       "date_posted": "2026-07-19",
+      "discovered_at": "2026-07-19T09:00:00Z",
       "seniority": "mid_level"
     },
     {
-      "id": "job-3",
+      "id": 3333,
       "job_title": "Machine Learning Engineer II",
       "company": "Initech",
+      "company_object": { "id": "c3", "name": "Initech" },
+      "url": "https://LinkedIn.com/jobs/view/3333",
       "source_url": "https://LinkedIn.com/jobs/view/3333",
-      "location": "Remote, US",
+      "short_location": "Remote, US",
       "country_code": "US",
       "remote": true,
-      "date_posted": "2026-07-18"
+      "date_posted": "2026-07-18",
+      "discovered_at": "2026-07-18T08:00:00Z"
     }
   ]
 }

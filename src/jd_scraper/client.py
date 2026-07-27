@@ -1,7 +1,4 @@
-"""HTTP client for the TheirStack jobs API.
-
-Endpoint and auth scheme are unverified -- see filters.BODY_FIELD_NOTES and `jd probe`.
-"""
+"""HTTP client for POST /v1/jobs/search."""
 
 from __future__ import annotations
 
@@ -24,16 +21,40 @@ OPENAPI_PATH = "/openapi.json"
 
 
 class TheirStackError(RuntimeError):
-    """An API call failed. Carries the body so filter mistakes are readable."""
+    """An API call failed. Carries the parsed error envelope when there is one."""
 
     def __init__(self, status_code: int, body: str, *, url: str = "") -> None:
         self.status_code = status_code
         self.body = body
-        super().__init__(f"TheirStack {status_code} for {url or SEARCH_PATH}: {body[:800]}")
+        self.url = url or SEARCH_PATH
+        self.title, self.code, self.description = self._parse(body)
+        super().__init__(self._message())
+
+    @staticmethod
+    def _parse(body: str) -> tuple[str | None, str | None, str | None]:
+        try:
+            error = (json.loads(body) or {}).get("error") or {}
+        except (ValueError, AttributeError):
+            return None, None, None
+        return error.get("title"), error.get("code"), error.get("description")
+
+    def _message(self) -> str:
+        parts = [f"TheirStack {self.status_code} for {self.url}"]
+        if self.title:
+            parts.append(f"{self.code + ': ' if self.code else ''}{self.title}")
+            if self.description:
+                parts.append(self.description)
+        else:
+            parts.append(self.body[:800])
+        return " -- ".join(parts)
 
 
 class RetryableError(TheirStackError):
     """429 or 5xx -- worth retrying."""
+
+
+class OutOfCreditsError(TheirStackError):
+    """402 -- the account cannot pay for this request."""
 
 
 class TheirStackClient:
@@ -72,22 +93,36 @@ class TheirStackClient:
         reraise=True,
     )
     def _post(self, path: str, body: dict[str, Any]) -> dict[str, Any]:
-        response = self._client.post(path, json=body)
-        return self._handle(response, path)
+        return self._handle(self._client.post(path, json=body), path)
 
     def _handle(self, response: httpx.Response, path: str) -> dict[str, Any]:
-        if response.status_code == 429 or response.status_code >= 500:
-            # Honor Retry-After when the server sends one; tenacity's backoff covers
-            # the rest.
-            raise RetryableError(response.status_code, response.text, url=path)
-        if response.status_code >= 400:
-            # Do NOT retry other 4xx: a bad filter name should fail loudly rather than
-            # loop against a metered API.
-            raise TheirStackError(response.status_code, response.text, url=path)
+        status = response.status_code
+        if status == 429 or status >= 500:
+            raise RetryableError(status, response.text, url=path)
+        if status == 402:
+            raise OutOfCreditsError(status, response.text, url=path)
+        if status >= 400:
+            # 400/422 mean a malformed filter. Retrying would burn credits without
+            # ever succeeding, so fail loudly instead.
+            raise TheirStackError(status, response.text, url=path)
         return response.json()
 
-    def search_page(self, profile: SearchProfile, page: int, page_size: int) -> dict[str, Any]:
-        body = build_request_body(profile, page=page, page_size=page_size)
+    def search_page(
+        self,
+        profile: SearchProfile,
+        page: int,
+        page_size: int,
+        *,
+        include_total_results: bool | None = None,
+        preview: bool | None = None,
+    ) -> dict[str, Any]:
+        body = build_request_body(
+            profile,
+            page=page,
+            page_size=page_size,
+            include_total_results=include_total_results,
+            preview=preview,
+        )
         return self._post(SEARCH_PATH, body)
 
     def search(
@@ -95,12 +130,14 @@ class TheirStackClient:
         profile: SearchProfile,
         *,
         max_results: int | None = None,
+        preview: bool | None = None,
+        include_total_results: bool | None = None,
         on_page: Callable[[int, int], None] | None = None,
     ) -> tuple[list[Job], dict[str, Any]]:
         """Page through results, stopping at the credit cap.
 
-        Returns (jobs, last_metadata). Source filtering is applied per page, but the
-        cap counts jobs *returned by the API*, since that is what gets billed.
+        Returns (jobs, metadata). The cap counts jobs returned by the API, since that
+        is the billed quantity -- not the smaller number left after source filtering.
         """
         cap = max_results if max_results is not None else profile.limit
         collected: list[Job] = []
@@ -110,8 +147,16 @@ class TheirStackClient:
 
         while billed < cap:
             page_size = min(profile.page_size, cap - billed)
-            payload = self.search_page(profile, page, page_size)
-            metadata = payload.get("metadata", {}) or {}
+            payload = self.search_page(
+                profile,
+                page,
+                page_size,
+                # Totals are expensive; ask only on the first page.
+                include_total_results=include_total_results if page == 0 else False,
+                preview=preview,
+            )
+            page_metadata = payload.get("metadata") or {}
+            metadata = {**page_metadata, **metadata} if page else page_metadata
 
             raw_jobs = payload.get("data") or []
             if not raw_jobs:
@@ -124,16 +169,15 @@ class TheirStackClient:
             if on_page is not None:
                 on_page(page, len(raw_jobs))
 
-            # A short page means we have reached the end of the result set.
             if len(raw_jobs) < page_size:
                 break
             page += 1
 
+        metadata["billed_results"] = billed
         return collected, metadata
 
     def fetch_openapi(self) -> dict[str, Any]:
-        response = self._client.get(OPENAPI_PATH)
-        return self._handle(response, OPENAPI_PATH)
+        return self._handle(self._client.get(OPENAPI_PATH), OPENAPI_PATH)
 
     def raw_search(self, body: dict[str, Any]) -> dict[str, Any]:
         """Send a hand-built body. Used by `jd probe`."""

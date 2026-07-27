@@ -5,7 +5,8 @@ from jd_scraper.models import SearchProfile
 from jd_scraper.wizard import build_profile_interactively, profile_to_yaml, write_profile
 
 # Answers in prompt order: name, titles, title_exclude, posted_within_days, countries,
-# patterns, remote, seniority, min_salary, companies_exclude, linkedin_only, limit.
+# patterns, remote, seniority, min_salary, companies_exclude, exclude_agencies,
+# linkedin_only, limit.
 ANSWERS = [
     "ml-us",
     "Machine Learning Engineer, ML Engineer",
@@ -18,8 +19,10 @@ ANSWERS = [
     "150000",
     "Staffing Co",
     "y",
+    "y",
     "25",
 ]
+NUM_PROMPTS = len(ANSWERS)
 
 
 def _scripted(monkeypatch, answers):
@@ -64,7 +67,7 @@ def test_wizard_collects_all_criteria(monkeypatch):
 
 
 def test_blank_answers_mean_no_filter(monkeypatch):
-    _scripted(monkeypatch, ["just-a-name"] + [""] * 11)
+    _scripted(monkeypatch, ["just-a-name"] + [""] * (NUM_PROMPTS - 1))
     prof = build_profile_interactively()
 
     assert prof.titles == []
@@ -83,7 +86,7 @@ def test_written_profile_round_trips(monkeypatch, tmp_path):
 
 
 def test_yaml_omits_empty_filters(monkeypatch):
-    _scripted(monkeypatch, ["sparse", "", "", "7", "", "", "", "", "", "", "y", "10"])
+    _scripted(monkeypatch, ["sparse", "", "", "7", "", "", "", "", "", "", "", "y", "10"])
     prof = build_profile_interactively()
     data = yaml.safe_load(profile_to_yaml(prof))
 
@@ -105,7 +108,7 @@ def test_edit_seeds_defaults_and_keeps_unprompted_fields(monkeypatch, tmp_path):
         }
     )
     # All blank -> every prompt keeps its seeded default.
-    _scripted(monkeypatch, [""] * 12)
+    _scripted(monkeypatch, [""] * NUM_PROMPTS)
     edited = build_profile_interactively(base)
 
     assert edited.name == "base"

@@ -12,6 +12,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from .filters import domain_of
 from .models import Job
 
 SCHEMA = """
@@ -113,9 +114,9 @@ class Store:
                 (
                     job_id,
                     job.job_title,
-                    job.company,
+                    job.company_name(),
                     job.best_url(),
-                    job.source,
+                    domain_of(job.best_url()),
                     job.best_location(),
                     job.country_code,
                     int(job.remote) if job.remote is not None else None,

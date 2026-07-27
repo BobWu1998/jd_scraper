@@ -4,35 +4,35 @@ Pull LinkedIn job postings via the [TheirStack](https://theirstack.com) API, fil
 job title, post time, location and more. Results are deduplicated into SQLite so repeat
 runs surface only what's new.
 
-## ⚠️ Read this first: the API schema is unverified
+Field mappings are written against the published reference for
+[`POST /v1/jobs/search`](https://theirstack.com/en/docs/api-reference/jobs/search_jobs_v1).
 
-This tool was built without network access to `api.theirstack.com`. The endpoint path,
-auth scheme and **every request filter field name are educated guesses**, not confirmed
-facts. They are documented in `src/jd_scraper/filters.py` (`BODY_FIELD_NOTES`).
+## Credits: 1 per job returned
 
-The design absorbs being wrong about them:
+Every posting a search returns costs a credit, so the tool is built to avoid returning
+things you didn't want:
 
-- Unknown response fields are preserved, never dropped, and every field is optional.
-- The full raw payload of each posting is stored in SQLite, so a bad field mapping is a
-  local re-parse rather than a re-fetch that costs credits again.
-- `extra: {}` in any profile merges raw keys straight into the request body, so you can
-  use a filter this tool got wrong without waiting on a code change.
-
-**Run `jd probe` first** (see below). It captures the real schema so the mappings can be
-corrected.
-
-## ⚠️ TheirStack bills per job returned
-
-Every posting a search returns consumes credits. Guards built in:
-
-- `limit` in each profile caps total results fetched per run.
-- `--max-results N` overrides it per invocation.
-- `--dry-run` prints the exact request body and exits — no call, no credits.
+- **`linkedin_only` filters server-side** via `url_domain_or`. Non-LinkedIn postings are
+  never returned and never billed. A client-side URL check backstops it.
+- **`--preview` is free.** Blurred results, no credits consumed — the right way to
+  validate a new profile before paying for it.
+- `limit` in each profile caps results per run; `--max-results N` overrides per run.
+- `--dry-run` prints the request body and exits. No call, no credits.
 - Runs above `JD_CONFIRM_THRESHOLD` (default 100) prompt for confirmation; `--yes` skips
   it for cron.
-- Non-429 `4xx` responses are never retried, so a bad filter fails once instead of looping.
+- `400`/`422` are never retried — a bad filter fails once instead of looping. `402`
+  reports out-of-credits distinctly.
+- `truncated_results` is surfaced after each run, so you know when matches were withheld
+  because the account ran short of credits.
 
-Start small. Trust the filters before raising `limit`.
+## Every search needs a date or company filter
+
+The API rejects a search unless at least one of these is set:
+
+`posted_within_days` · `posted_after` · `posted_before` · `companies`
+
+A title or location filter **alone is not enough**. This is validated locally before the
+request is sent, so you get a readable error instead of a wasted round trip.
 
 ## Setup
 
@@ -45,29 +45,32 @@ cp .env.example .env
 ## Usage
 
 ```bash
-# 0. Build a search profile by answering prompts (no API call, no credits).
+# Build a profile by answering prompts (no API call, no credits).
 uv run jd profile new
 
-# 1. Capture the real API schema. Do this before anything else.
-uv run jd probe
-
-# 2. Inspect what a profile would send, without calling the API.
+# See the exact request body it produces.
 uv run jd search --profile profiles/example.yml --dry-run
 
-# 3. Smallest real search.
+# Validate the filters for free — blurred results, no credits.
+uv run jd search --profile profiles/example.yml --preview
+
+# Smallest real search.
 uv run jd search --profile profiles/example.yml --max-results 5
 
-# 4. Re-run: should report 0 new.
+# Re-run: should report 0 new.
 uv run jd search --profile profiles/example.yml --max-results 5
 
-# Browse and export what's stored.
+# Browse and export.
 uv run jd list --limit 20
 uv run jd export --format csv --out exports/jobs.csv
 uv run jd export --format jsonl --out exports/jobs.jsonl   # full raw payloads
 ```
 
-Useful flags on `search`: `--only-new` (just this run's new postings), `--no-store`
-(print without touching the DB), `--yes` (skip the credit prompt).
+Other `search` flags: `--only-new`, `--no-store`, `--totals` (ask for total match
+counts — slower, it reads the whole dataset), `--yes`.
+
+`jd probe` captures the live OpenAPI spec and a 1-result sample response to
+`docs/api-snapshot.json` — useful if the API changes under you.
 
 ## Search profiles
 
@@ -80,30 +83,32 @@ uv run jd profile show profiles/ml-us.yml  # print the profile and the body it w
 ```
 
 The wizard never calls the API, so iterating on criteria is free. Each command prints the
-resulting request body, which is the fastest way to see what a change actually does.
-Filters it doesn't prompt for (`description_contains`, `companies`, `extra`) are carried
-through untouched when editing, so hand-written YAML is never silently dropped.
+resulting request body. Filters it doesn't prompt for (`description_pattern`, `posted_after`,
+`extra`, …) are carried through untouched when editing, so hand-written YAML is never
+silently dropped.
 
 See `profiles/example.yml` for every supported key. The essentials:
 
 ```yaml
 name: ml-engineer-us
-titles: ["Machine Learning Engineer", "ML Engineer"]
+titles: ["Machine Learning Engineer"]   # keyword match, all words in any order
 title_exclude: ["Intern"]
-posted_within_days: 7              # post time
+posted_within_days: 7                   # required (or posted_after/before/companies)
 locations:
   countries: ["US"]
   patterns: ["San Francisco"]
 remote: true
+seniority: [mid_level, senior]          # c_level|staff|senior|junior|mid_level
+exclude_recruiting_agencies: true
 sources:
-  linkedin_only: true              # enforced client-side on the job URL
-limit: 50                          # credit ceiling
-extra: {}                          # raw pass-through into the request body
+  linkedin_only: true                   # server-side url_domain_or
+limit: 50                               # credit ceiling
+extra: {}                               # raw pass-through into the request body
 ```
 
-`linkedin_only` is enforced client-side by matching `linkedin.com` against each
-posting's URL fields. That client-side check is what actually guarantees the filter,
-since any request-side source filter is unverified.
+**Title matching is keyword-based, not exact.** Every word in a pattern must appear in the
+title, in any order, case-insensitively — so `"machine learning engineer"` also matches
+`"Senior Machine Learning Engineer, Platform"`. Use `title_pattern` for regex instead.
 
 ## Layout
 
@@ -118,12 +123,20 @@ since any request-side source filter is unverified.
 | `src/jd_scraper/wizard.py` | Interactive profile builder / editor |
 | `src/jd_scraper/cli.py` | Typer commands |
 
+The `Job` model keeps unknown response fields rather than dropping them, and the full raw
+payload of each posting is stored in SQLite — so if the API adds or renames a field, the
+data is still on disk and re-parsing is a local migration, not a re-fetch you pay for.
+
 ## Tests
 
 ```bash
 uv run pytest
 ```
 
-The suite is fully offline, driven by `httpx.MockTransport` and a hand-written fixture.
-It proves internal consistency — pagination, the result cap, retry policy, dedup, filter
-mapping — but **not** agreement with the real API. Only `jd probe` establishes that.
+47 tests, fully offline, driven by `httpx.MockTransport`. They cover filter mapping, the
+mandatory-filter rule, LinkedIn detection (including lookalike hosts like
+`notlinkedin.com`), pagination and the result cap, retry policy, and dedup.
+
+They run against a hand-written fixture, so they verify this tool's behaviour against the
+documented schema — not the live API's actual responses. A real `jd search --preview` run
+is what confirms the end-to-end path.

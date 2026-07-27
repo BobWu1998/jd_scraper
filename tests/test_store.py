@@ -27,13 +27,13 @@ def test_first_seen_at_survives_reupsert(tmp_path, sample_response):
     with Store(db) as store:
         store.upsert_jobs(jobs, "test-profile")
         original = store.conn.execute(
-            "SELECT first_seen_at FROM jobs WHERE id = 'job-1'"
+            "SELECT first_seen_at FROM jobs WHERE id = '1111'"
         ).fetchone()[0]
 
         jobs[0].job_title = "Updated Title"
         store.upsert_jobs(jobs, "test-profile")
 
-        row = store.conn.execute("SELECT * FROM jobs WHERE id = 'job-1'").fetchone()
+        row = store.conn.execute("SELECT * FROM jobs WHERE id = '1111'").fetchone()
         assert row["first_seen_at"] == original, "first_seen_at must not be overwritten"
         assert row["job_title"] == "Updated Title", "other fields should refresh"
 
@@ -49,14 +49,14 @@ def test_new_only_since_isolates_second_batch(tmp_path, sample_response):
         store.upsert_jobs(jobs, "test-profile")
         rows = store.list_jobs(limit=50, new_only_since=marker)
         ids = {r["id"] for r in rows}
-        assert "job-3" in ids
+        assert "3333" in ids
 
 
 def test_raw_payload_is_retained(tmp_path, sample_response):
     db = tmp_path / "jobs.db"
     with Store(db) as store:
         store.upsert_jobs(_jobs(sample_response), "test-profile")
-        raw = store.conn.execute("SELECT raw FROM jobs WHERE id = 'job-1'").fetchone()[0]
+        raw = store.conn.execute("SELECT raw FROM jobs WHERE id = '1111'").fetchone()[0]
     assert "an_unexpected_field" in raw, "unmapped API fields must survive on disk"
 
 
