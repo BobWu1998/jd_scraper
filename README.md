@@ -101,6 +101,25 @@ cp .env.example .env
 # then put your key in .env
 ```
 
+Without `uv`, use a plain venv instead — but don't mix the two in one `.venv`, which
+leaves a half-installed environment behind:
+
+```bash
+python3 -m venv .venv \
+  && source .venv/bin/activate \
+  && pip install -e ".[dev]"
+```
+
+Then drop the `uv run` prefix from every command below.
+
+**If you see `ModuleNotFoundError: No module named 'jd_scraper'`** while `.venv/bin/jd`
+exists, the environment is half-built. Rebuild it:
+
+```bash
+rm -rf .venv \
+  && uv sync
+```
+
 ## Usage
 
 ```bash

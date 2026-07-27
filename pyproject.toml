@@ -17,6 +17,14 @@ dependencies = [
 [project.scripts]
 jd = "jd_scraper.cli:app"
 
+# Declared twice on purpose: uv installs `dependency-groups.dev` by default, while
+# `pip install -e ".[dev]"` can only see optional-dependencies. Without the extra,
+# pip silently warns and leaves pytest uninstalled.
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.2",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=8.2",
