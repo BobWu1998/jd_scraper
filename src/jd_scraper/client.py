@@ -115,6 +115,8 @@ class TheirStackClient:
         *,
         include_total_results: bool | None = None,
         preview: bool | None = None,
+        discovered_since: str | None = None,
+        exclude_ids: list[int] | None = None,
     ) -> dict[str, Any]:
         body = build_request_body(
             profile,
@@ -122,6 +124,8 @@ class TheirStackClient:
             page_size=page_size,
             include_total_results=include_total_results,
             preview=preview,
+            discovered_since=discovered_since,
+            exclude_ids=exclude_ids,
         )
         return self._post(SEARCH_PATH, body)
 
@@ -132,6 +136,8 @@ class TheirStackClient:
         max_results: int | None = None,
         preview: bool | None = None,
         include_total_results: bool | None = None,
+        discovered_since: str | None = None,
+        exclude_ids: list[int] | None = None,
         on_page: Callable[[int, int], None] | None = None,
     ) -> tuple[list[Job], dict[str, Any]]:
         """Page through results, stopping at the credit cap.
@@ -154,6 +160,8 @@ class TheirStackClient:
                 # Totals are expensive; ask only on the first page.
                 include_total_results=include_total_results if page == 0 else False,
                 preview=preview,
+                discovered_since=discovered_since,
+                exclude_ids=exclude_ids,
             )
             page_metadata = payload.get("metadata") or {}
             metadata = {**page_metadata, **metadata} if page else page_metadata

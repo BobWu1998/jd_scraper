@@ -72,7 +72,18 @@ class SearchProfile(BaseModel):
     posted_before: str | None = None
 
     locations: Locations = Field(default_factory=Locations)
+
     remote: bool | None = None
+    """True = remote only, False = on-site only, unset = no filter. This ANDs with
+    the location filters, so it narrows them -- see `include_remote` to widen."""
+
+    include_remote: bool = False
+    """Union remote jobs with the location filter instead of intersecting them.
+
+    The API ANDs its filters, so "Atlanta OR remote" cannot be one request: the
+    remote flag and the location text are different fields. Setting this runs a
+    second search with `remote: true` and no location patterns, and merges the
+    results. Costs a second request; jobs matching both are billed twice."""
 
     seniority: list[str] = Field(default_factory=list)
     employment_types: list[str] = Field(default_factory=list)
@@ -96,6 +107,16 @@ class SearchProfile(BaseModel):
     """Hard ceiling on results fetched per run. 1 credit is billed per job returned."""
 
     page_size: int = 25
+
+    incremental: bool = True
+    """Ask the API only for postings discovered since this profile's last run, and
+    exclude ids already stored. Avoids paying credits for rows you already have.
+    Override for one run with `jd search --full`."""
+
+    incremental_overlap_minutes: int = 60
+    """Rewind the "since" timestamp by this much so a posting discovered while the
+    previous run was in flight is not skipped. The id exclusion covers the
+    duplicates this overlap would otherwise reintroduce."""
 
     include_total_results: bool = False
     """Ask the API for total counts. Significantly slower -- it reads the whole
