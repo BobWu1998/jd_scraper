@@ -1,0 +1,48 @@
+# Atlanta-area + remote ML / CV / robotics roles, junior to mid-level, posted in
+# roughly the last day.
+#
+# Preview mode is ON: results come back blurred and cost no credits. Flip
+# `preview` to false (or pass --no-preview via `extra`) once the filters look right.
+
+name: atlanta-ml
+
+# Keyword matching: every word in a pattern must appear in the title, in any
+# order, case-insensitively. "machine learning" therefore matches
+# "Machine Learning Engineer" and "Engineer, Machine Learning" alike.
+titles:
+  - "machine learning"
+  - "computer vision"
+  - "robotics"
+
+# The API works in calendar days, not rolling hours. 1 = today and yesterday,
+# which is the closest available window to "last 24 hours" and errs toward not
+# missing a posting. Set 0 for strictly today only.
+posted_within_days: 1
+
+locations:
+  countries: ["US"]
+  # Atlanta OR remote. These patterns are OR'd against the job's location, which
+  # is how both get included -- see the note in README about why `remote: true`
+  # would narrow this instead of widening it.
+  patterns:
+    - "Atlanta"
+    - "Remote"
+
+# Deliberately unset. `remote: true` would mean "remote jobs ONLY", and combined
+# with the Atlanta pattern above would AND down to "remote jobs in Atlanta".
+# Leaving it out means "all jobs", letting the location patterns do the work.
+# remote:
+
+seniority:
+  - junior
+  - mid_level
+
+sources:
+  linkedin_only: true
+
+limit: 10
+page_size: 10
+
+preview: true
+
+extra: {}
