@@ -17,7 +17,7 @@ titles:
 # The API works in calendar days, not rolling hours. 1 = today and yesterday,
 # which is the closest available window to "last 24 hours" and errs toward not
 # missing a posting. Set 0 for strictly today only.
-posted_within_days: 1
+posted_within_days: 5
 
 locations:
   countries: ["US"]
