@@ -72,7 +72,18 @@ class SearchProfile(BaseModel):
     posted_before: str | None = None
 
     locations: Locations = Field(default_factory=Locations)
+
     remote: bool | None = None
+    """True = remote only, False = on-site only, unset = no filter. This ANDs with
+    the location filters, so it narrows them -- see `include_remote` to widen."""
+
+    include_remote: bool = False
+    """Union remote jobs with the location filter instead of intersecting them.
+
+    The API ANDs its filters, so "Atlanta OR remote" cannot be one request: the
+    remote flag and the location text are different fields. Setting this runs a
+    second search with `remote: true` and no location patterns, and merges the
+    results. Costs a second request; jobs matching both are billed twice."""
 
     seniority: list[str] = Field(default_factory=list)
     employment_types: list[str] = Field(default_factory=list)

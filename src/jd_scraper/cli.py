@@ -14,7 +14,7 @@ from rich.table import Table
 from .client import OutOfCreditsError, TheirStackClient, TheirStackError, format_body
 from .config import load_settings
 from .export import write_csv, write_jsonl
-from .filters import MissingMandatoryFilterError, build_request_body
+from .filters import MissingMandatoryFilterError, build_request_body, expand_queries
 from .models import SearchProfile
 from .store import Store
 from .wizard import build_profile_interactively, profile_to_yaml, write_profile
@@ -67,14 +67,19 @@ def search(
     discovered_since, exclude_ids = _incremental_window(prof, settings, disabled=full)
 
     if dry_run:
-        _print_body(
-            prof,
-            cap=cap,
-            preview=preview,
-            totals=totals,
-            discovered_since=discovered_since,
-            exclude_ids=exclude_ids,
-        )
+        variants = expand_queries(prof)
+        share = max(1, cap // len(variants))
+        for index, (label, variant) in enumerate(variants):
+            if label:
+                console.print(f"\n[bold cyan]--- {label} search ---[/bold cyan]")
+            _print_body(
+                variant,
+                cap=cap if len(variants) == 1 else share,
+                preview=preview,
+                totals=totals,
+                discovered_since=discovered_since,
+                exclude_ids=exclude_ids,
+            )
         return
 
     if discovered_since:
@@ -114,8 +119,21 @@ def search(
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2)
 
+    queries = expand_queries(prof)
+    if len(queries) > 1:
+        console.print(
+            f"[dim]Running {len(queries)} searches and merging: "
+            f"{', '.join(label for label, _ in queries)}. "
+            f"The API ANDs filters, so OR needs separate requests.[/dim]"
+        )
+
     def _progress(page: int, count: int) -> None:
-        console.print(f"[dim]page {page}: {count} results[/dim]")
+        console.print(f"[dim]  page {page}: {count} results[/dim]")
+
+    jobs: list = []
+    seen_ids: set = set()
+    billed = 0
+    metadata: dict = {}
 
     try:
         with TheirStackClient(
@@ -123,15 +141,33 @@ def search(
             base_url=settings.theirstack_base_url,
             timeout=settings.jd_timeout_seconds,
         ) as client:
-            jobs, metadata = client.search(
-                prof,
-                max_results=cap,
-                preview=preview,
-                include_total_results=totals,
-                discovered_since=discovered_since,
-                exclude_ids=exclude_ids,
-                on_page=_progress,
-            )
+            # Split the cap so one variant cannot starve the other.
+            share = max(1, cap // len(queries))
+            for index, (label, variant) in enumerate(queries):
+                # Give any remainder to the last variant.
+                budget = cap - (share * index) if index == len(queries) - 1 else share
+                if budget < 1:
+                    break
+                if label:
+                    console.print(f"[dim]{label} search (up to {budget}):[/dim]")
+
+                found, meta = client.search(
+                    variant,
+                    max_results=budget,
+                    preview=preview,
+                    include_total_results=totals,
+                    discovered_since=discovered_since,
+                    exclude_ids=exclude_ids,
+                    on_page=_progress,
+                )
+                billed += meta.get("billed_results", 0)
+                metadata = {**meta, **metadata}
+                for job in found:
+                    if job.id is not None and job.id in seen_ids:
+                        continue  # matched both searches; keep one copy
+                    if job.id is not None:
+                        seen_ids.add(job.id)
+                    jobs.append(job)
     except OutOfCreditsError as exc:
         console.print(f"[red]Out of credits:[/red] {exc}")
         console.print("[dim]Re-run with --preview for free, blurred results.[/dim]")
@@ -140,7 +176,7 @@ def search(
         console.print(f"[red]API call failed:[/red] {exc}")
         raise typer.Exit(1)
 
-    billed = metadata.get("billed_results", 0)
+    metadata["billed_results"] = billed
     if preview:
         console.print(f"[dim]Preview mode: {billed} blurred results, no credits used.[/dim]")
     else:

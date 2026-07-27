@@ -11,8 +11,10 @@ name: atlanta-ml
 # "Machine Learning Engineer" and "Engineer, Machine Learning" alike.
 titles:
   - "machine learning"
+  - "ML engineer"
   - "computer vision"
   - "robotics"
+  - "AI"
 
 # The API works in calendar days, not rolling hours. 1 = today and yesterday,
 # which is the closest available window to "last 24 hours" and errs toward not
@@ -21,16 +23,17 @@ posted_within_days: 1
 
 locations:
   countries: ["US"]
-  # Atlanta OR remote. These patterns are OR'd against the job's location, which
-  # is how both get included -- see the note in README about why `remote: true`
-  # would narrow this instead of widening it.
   patterns:
     - "Atlanta"
-    - "Remote"
 
-# Deliberately unset. `remote: true` would mean "remote jobs ONLY", and combined
-# with the Atlanta pattern above would AND down to "remote jobs in Atlanta".
-# Leaving it out means "all jobs", letting the location patterns do the work.
+# Atlanta OR remote. Matching the word "Remote" in the location text missed most
+# remote jobs, because their location often reads "United States" or the company
+# HQ instead. This runs a second search with the actual `remote: true` flag and
+# no location pattern, then merges the results.
+include_remote: true
+
+# Leave `remote` unset. Setting it here would mean "remote only" and would AND
+# with the Atlanta pattern, which is the narrowing this flag exists to avoid.
 # remote:
 
 seniority:

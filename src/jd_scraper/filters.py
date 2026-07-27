@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any
 from urllib.parse import urlparse
 
-from .models import Job, SearchProfile
+from .models import Job, Locations, SearchProfile
 
 LINKEDIN_DOMAIN = "linkedin.com"
 
@@ -169,6 +169,40 @@ def _assert_mandatory_filter(body: dict[str, Any]) -> None:
         "Add one -- posted_within_days: 7 is the usual choice. A title or location "
         "filter alone is not enough; the API rejects it for performance reasons."
     )
+
+
+def expand_queries(profile: SearchProfile) -> list[tuple[str, SearchProfile]]:
+    """Split a profile into the searches needed to express it.
+
+    The API ANDs every filter, so an OR across two different filter dimensions --
+    "in Atlanta OR remote anywhere" -- cannot be a single request: location is
+    matched on the job's location text, remote is a separate boolean. When
+    `include_remote` is set we issue one location-scoped search and one remote
+    search, and the caller unions the results.
+
+    Returns (label, profile) pairs. A single-element list is the normal case.
+    """
+    if not profile.include_remote:
+        return [("", profile)]
+
+    has_location = bool(profile.locations.patterns or profile.locations.ids)
+    if not has_location or profile.remote is not None:
+        # Nothing to widen: either there is no location filter to OR against, or
+        # `remote` was set explicitly and the caller means the narrower AND.
+        return [("", profile)]
+
+    located = profile.model_copy(deep=True)
+    located.include_remote = False
+
+    remote = profile.model_copy(deep=True)
+    remote.include_remote = False
+    remote.remote = True
+    # Drop the location text filter -- keeping it would AND right back down to
+    # "remote jobs whose location says Atlanta", which is the bug this fixes.
+    # Country is kept so a US search stays a US search.
+    remote.locations = Locations(countries=list(profile.locations.countries))
+
+    return [("location", located), ("remote", remote)]
 
 
 def domain_of(url: str | None) -> str | None:

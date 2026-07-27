@@ -56,6 +56,34 @@ Worth knowing: the watermark is keyed on the **profile name** and read from the 
 table. Renaming a profile resets its history, and `--no-store` runs are not recorded, so
 they don't advance it.
 
+## "In this city OR remote"
+
+The API ANDs every filter, and remote-ness is a boolean field while location is matched
+against the job's location *text*. So `remote: true` alongside a location pattern means
+"remote jobs whose location says Atlanta" — narrower, not wider.
+
+Matching the literal word `"Remote"` in the location pattern doesn't work either: plenty
+of genuinely remote postings list their location as `"United States"` or the company's
+head office.
+
+`include_remote: true` expresses the OR properly by issuing two searches and merging:
+
+```yaml
+locations:
+  countries: ["US"]
+  patterns: ["Atlanta"]
+include_remote: true
+```
+
+1. the location search — `job_location_pattern_or: ["Atlanta"]`, no remote flag
+2. the remote search — `remote: true`, location pattern dropped, country kept
+
+Results are unioned and deduplicated by job id. The run's `limit` is split evenly between
+the two so neither starves the other. **A job matching both is billed twice** — once per
+search — which is the price of an OR the API won't do for you.
+
+Setting `remote` explicitly disables the split: that's read as "I want the narrow AND".
+
 ## Every search needs a date or company filter
 
 The API rejects a search unless at least one of these is set:

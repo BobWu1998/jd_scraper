@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from jd_scraper.filters import MANDATORY_FILTERS, build_request_body
+from jd_scraper.filters import MANDATORY_FILTERS, build_request_body, expand_queries
 from jd_scraper.models import SearchProfile
 
 PROFILE_DIR = Path(__file__).resolve().parent.parent / "profiles"
@@ -29,15 +29,35 @@ def test_profile_is_valid_and_searchable(path):
 def test_atlanta_profile_matches_intent():
     """Atlanta OR remote, junior/mid, last day, capped at 10, free preview."""
     profile = SearchProfile.from_yaml(str(PROFILE_DIR / "atlanta-ml.yml"))
-    body = build_request_body(profile, page=0, page_size=profile.page_size)
 
-    assert body["job_title_or"] == ["machine learning", "computer vision", "robotics"]
+    assert profile.titles == [
+        "machine learning",
+        "ML engineer",
+        "computer vision",
+        "robotics",
+        "AI",
+    ]
+    assert profile.limit == 10
+    assert profile.preview is True
+
+    body = build_request_body(profile, page=0, page_size=profile.page_size)
     assert body["job_seniority_or"] == ["junior", "mid_level"]
     assert body["posted_at_max_age_days"] == 1
-    assert body["job_location_pattern_or"] == ["Atlanta", "Remote"]
     assert body["limit"] == 10
     assert body["blur_company_data"] is True
 
-    # The crux: `remote` must stay unset. Setting it true would AND with the
-    # Atlanta pattern and return only remote-jobs-in-Atlanta.
-    assert "remote" not in body, "remote must stay unset so location patterns OR"
+
+def test_atlanta_profile_ors_location_with_remote():
+    """Two searches, because the API cannot AND its way to an OR."""
+    profile = SearchProfile.from_yaml(str(PROFILE_DIR / "atlanta-ml.yml"))
+    queries = expand_queries(profile)
+
+    assert [label for label, _ in queries] == ["location", "remote"]
+
+    located = build_request_body(queries[0][1])
+    assert located["job_location_pattern_or"] == ["Atlanta"]
+    assert "remote" not in located
+
+    remote = build_request_body(queries[1][1])
+    assert remote["remote"] is True
+    assert "job_location_pattern_or" not in remote, "would re-narrow to remote-in-Atlanta"
