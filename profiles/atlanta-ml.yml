@@ -12,9 +12,9 @@ name: atlanta-ml
 titles:
   - "machine learning"
   - "ML engineer"
-  - "computer vision"
-  - "robotics"
-  - "AI"
+  - "Computer Vision"
+  - "Robotics"
+  - "AI Engineer"
 
 # The API works in calendar days, not rolling hours. 1 = today and yesterday,
 # which is the closest available window to "last 24 hours" and errs toward not
