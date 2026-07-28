@@ -330,6 +330,40 @@ def export(
 
 
 @app.command()
+def serve(
+    port: int = typer.Option(8000, "--port", "-p"),
+    host: str = typer.Option("127.0.0.1", "--host"),
+    open_browser: bool = typer.Option(True, "--open/--no-open"),
+) -> None:
+    """Browse and triage stored jobs in a local web UI.
+
+    Reads the database only -- it never calls TheirStack, so it cannot spend credits.
+    """
+    import uvicorn
+
+    from .web import create_app
+
+    settings = load_settings()
+    if not Path(settings.jd_db_path).exists():
+        console.print(
+            f"[yellow]No database at {settings.jd_db_path} yet.[/yellow] "
+            "The UI will open, but run a search first to have anything to show."
+        )
+
+    url = f"http://{host}:{port}"
+    console.print(f"[green]Serving {settings.jd_db_path} at {url}[/green]")
+    console.print("[dim]Read-only against the API — browsing costs no credits.[/dim]")
+
+    if open_browser:
+        import threading
+        import webbrowser
+
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+
+    uvicorn.run(create_app(), host=host, port=port, log_level="warning")
+
+
+@app.command()
 def probe(
     out: str = typer.Option("docs/api-snapshot.json", "--out", "-o"),
 ) -> None:

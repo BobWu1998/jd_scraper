@@ -141,6 +141,7 @@ uv run jd search --profile profiles/example.yml --max-results 5
 # Browse, read one in full, and export.
 uv run jd list --limit 20
 uv run jd show 1234567                 # links + complete description
+uv run jd serve                        # or browse everything in a GUI
 uv run jd export --format csv --out exports/jobs.csv
 uv run jd export --format jsonl --out exports/jobs.jsonl   # full raw payloads
 ```
@@ -181,6 +182,26 @@ not readable descriptions or working links. Set `preview: false` and re-run to g
 Rows saved before these columns existed are **backfilled from the stored raw payload**
 the first time the database is opened by a newer version — no re-fetch, no credits. That
 is why the full response is kept in the `raw` column.
+
+## Browse them in a GUI
+
+```bash
+uv run jd serve
+```
+
+Opens a local web UI at `http://127.0.0.1:8000` backed by your SQLite file. It reads the
+database only — it never calls TheirStack, so browsing can't spend credits.
+
+- Search across title, company, location **and description text**
+- Filter by status, profile, and remote/on-site
+- Full description rendered from markdown, with **Apply** and **Company page** links
+- Triage each job: `new` → `interested` → `applied` → `interviewing` → `rejected` /
+  `dismissed`, plus free-text notes
+
+Your status and notes live in the same database but are **never touched by a search** —
+re-fetching a job you already applied to won't reset it. There's a test pinning that.
+
+`--port`, `--host` and `--no-open` are available if the defaults don't suit.
 
 ## Search profiles
 
@@ -231,6 +252,8 @@ title, in any order, case-insensitively — so `"machine learning engineer"` als
 | `src/jd_scraper/store.py` | SQLite schema, upsert, dedup |
 | `src/jd_scraper/export.py` | CSV / JSONL writers |
 | `src/jd_scraper/wizard.py` | Interactive profile builder / editor |
+| `src/jd_scraper/web.py` | Local web UI API (FastAPI, read-only) |
+| `src/jd_scraper/static/index.html` | The UI itself — no CDN, no build step |
 | `src/jd_scraper/cli.py` | Typer commands |
 
 The `Job` model keeps unknown response fields rather than dropping them, and the full raw
@@ -243,7 +266,7 @@ data is still on disk and re-parsing is a local migration, not a re-fetch you pa
 uv run pytest
 ```
 
-47 tests, fully offline, driven by `httpx.MockTransport`. They cover filter mapping, the
+93 tests, fully offline, driven by `httpx.MockTransport`. They cover filter mapping, the
 mandatory-filter rule, LinkedIn detection (including lookalike hosts like
 `notlinkedin.com`), pagination and the result cap, retry policy, and dedup.
 

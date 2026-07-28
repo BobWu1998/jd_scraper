@@ -15,9 +15,15 @@ from typing import Any, Iterable
 from .filters import domain_of
 from .models import Job
 
+STATUSES = ("new", "interested", "applied", "interviewing", "rejected", "dismissed")
+DEFAULT_STATUS = "new"
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS jobs (
   id TEXT PRIMARY KEY,
+  status TEXT DEFAULT 'new',
+  notes TEXT,
+  status_updated_at TEXT,
   job_title TEXT,
   company TEXT,
   url TEXT,
@@ -69,11 +75,17 @@ class Store:
     # Columns added after the first release. Existing databases get them via
     # ALTER TABLE, then backfilled from the stored raw payload -- which is exactly
     # why the full response is kept, so widening the schema never costs credits.
+    # (column, declaration, json path in `raw` or None for locally-owned columns)
     _ADDED_COLUMNS = (
         ("final_url", "TEXT", "$.final_url"),
         ("description", "TEXT", "$.description"),
         ("salary_string", "TEXT", "$.salary_string"),
         ("easy_apply", "INTEGER", "$.easy_apply"),
+        # Your own triage state. Never overwritten by a search, since a re-fetch
+        # of an already-applied job must not reset it to "new".
+        ("status", "TEXT", None),
+        ("notes", "TEXT", None),
+        ("status_updated_at", "TEXT", None),
     )
 
     def _migrate(self) -> None:
@@ -82,7 +94,10 @@ class Store:
         for name, decl, _ in added:
             self.conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {decl}")
         if added:
-            self.backfill_from_raw([c[0] for c in added])
+            self.backfill_from_raw([c[0] for c in added if c[2]])
+        self.conn.execute(
+            f"UPDATE jobs SET status = '{DEFAULT_STATUS}' WHERE status IS NULL"
+        )
 
     def backfill_from_raw(self, columns: list[str] | None = None) -> int:
         """Populate columns from the stored raw JSON. Returns rows touched.
@@ -143,8 +158,10 @@ class Store:
                   id, job_title, company, url, final_url, description, salary_string,
                   easy_apply, source, location, country_code, remote,
                   date_posted, discovered_at, min_salary_usd, max_salary_usd, seniority,
-                  profile, first_seen_at, raw
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                  profile, first_seen_at, raw, status
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                -- status/notes are deliberately absent from the UPDATE below:
+                -- re-fetching a job you already applied to must not reset it.
                 ON CONFLICT(id) DO UPDATE SET
                   job_title = excluded.job_title,
                   company = excluded.company,
@@ -185,6 +202,7 @@ class Store:
                     profile_name,
                     now,
                     json.dumps(job.model_dump(mode="json"), default=str),
+                    DEFAULT_STATUS,
                 ),
             )
             if existed is None:
@@ -207,6 +225,42 @@ class Store:
         )
         self.conn.commit()
 
+    def set_status(
+        self, job_id: str, status: str | None = None, notes: str | None = None
+    ) -> sqlite3.Row | None:
+        """Update triage state. Either field may be omitted to leave it alone."""
+        if status is not None and status not in STATUSES:
+            raise ValueError(f"unknown status {status!r}; valid: {list(STATUSES)}")
+
+        sets, params = [], []
+        if status is not None:
+            sets.append("status = ?")
+            params.append(status)
+        if notes is not None:
+            sets.append("notes = ?")
+            params.append(notes)
+        if not sets:
+            return self.get_job(job_id)
+
+        sets.append("status_updated_at = ?")
+        params.extend([_now(), str(job_id)])
+        self.conn.execute(f"UPDATE jobs SET {', '.join(sets)} WHERE id = ?", params)
+        self.conn.commit()
+        return self.get_job(job_id)
+
+    def status_counts(self) -> dict[str, int]:
+        rows = self.conn.execute(
+            "SELECT COALESCE(status, ?) AS s, COUNT(*) FROM jobs GROUP BY s",
+            (DEFAULT_STATUS,),
+        ).fetchall()
+        return {row[0]: row[1] for row in rows}
+
+    def profiles(self) -> list[str]:
+        rows = self.conn.execute(
+            "SELECT DISTINCT profile FROM jobs WHERE profile IS NOT NULL ORDER BY profile"
+        ).fetchall()
+        return [r[0] for r in rows]
+
     def list_jobs(
         self,
         *,
@@ -214,9 +268,26 @@ class Store:
         since_days: int | None = None,
         profile: str | None = None,
         new_only_since: str | None = None,
+        query: str | None = None,
+        status: str | None = None,
+        remote: bool | None = None,
     ) -> list[sqlite3.Row]:
         clauses: list[str] = []
         params: list[Any] = []
+
+        if query:
+            like = f"%{query}%"
+            clauses.append(
+                "(job_title LIKE ? OR company LIKE ? OR location LIKE ? "
+                "OR description LIKE ?)"
+            )
+            params.extend([like, like, like, like])
+        if status:
+            clauses.append("COALESCE(status, ?) = ?")
+            params.extend([DEFAULT_STATUS, status])
+        if remote is not None:
+            clauses.append("remote = ?")
+            params.append(int(remote))
 
         if since_days is not None:
             cutoff = (datetime.now(timezone.utc) - timedelta(days=since_days)).isoformat()
