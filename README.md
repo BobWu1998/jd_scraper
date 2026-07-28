@@ -189,8 +189,9 @@ is why the full response is kept in the `raw` column.
 uv run jd serve
 ```
 
-Opens a local web UI at `http://127.0.0.1:8000` backed by your SQLite file. It reads the
-database only — it never calls TheirStack, so browsing can't spend credits.
+Opens a local web UI at `http://127.0.0.1:8000` backed by your SQLite file. **Browsing is
+read-only and costs nothing** — the only thing that reaches TheirStack is the New search
+button, described below.
 
 - Search across title, company, location **and description text**
 - Filter by status, profile, and remote/on-site
@@ -200,6 +201,28 @@ database only — it never calls TheirStack, so browsing can't spend credits.
 
 Your status and notes live in the same database but are **never touched by a search** —
 re-fetching a job you already applied to won't reset it. There's a test pinning that.
+
+### Running a new search from the UI
+
+The **New search** button opens a filter form — titles, exclusions, locations, seniority,
+salary, date window, description keywords, remote handling. It's the same engine the CLI
+uses (`runner.py`), so the credit guards are identical rather than reimplemented.
+
+Because a button that spends money deserves more care than a flag:
+
+- **Preview mode is on by default** — blurred results, zero credits.
+- The footer always shows the exposure: *Free* in green, or *Up to N credits* in amber.
+- **Check** shows the exact request body without calling the API. Free, and the fastest
+  way to see what a filter change actually does.
+- Turning preview off triggers a confirmation naming the credit cost. The server also
+  refuses an unconfirmed paid run outright, so a stray request can't spend anything.
+- `JD_WEB_MAX_RESULTS` (default 100) hard-caps any search started from the UI, no matter
+  what the form asks for.
+- Incremental fetching still applies — a second run of the same profile name excludes
+  jobs you already have.
+
+Name the search to control the watermark: reusing a name continues that search's history,
+a new name starts fresh. You can also prefill the form from any saved profile YAML.
 
 `--port`, `--host` and `--no-open` are available if the defaults don't suit.
 
@@ -252,7 +275,8 @@ title, in any order, case-insensitively — so `"machine learning engineer"` als
 | `src/jd_scraper/store.py` | SQLite schema, upsert, dedup |
 | `src/jd_scraper/export.py` | CSV / JSONL writers |
 | `src/jd_scraper/wizard.py` | Interactive profile builder / editor |
-| `src/jd_scraper/web.py` | Local web UI API (FastAPI, read-only) |
+| `src/jd_scraper/runner.py` | Shared search execution for CLI and web |
+| `src/jd_scraper/web.py` | Local web UI API (FastAPI) |
 | `src/jd_scraper/static/index.html` | The UI itself — no CDN, no build step |
 | `src/jd_scraper/cli.py` | Typer commands |
 
@@ -266,7 +290,7 @@ data is still on disk and re-parsing is a local migration, not a re-fetch you pa
 uv run pytest
 ```
 
-93 tests, fully offline, driven by `httpx.MockTransport`. They cover filter mapping, the
+107 tests, fully offline, driven by `httpx.MockTransport`. They cover filter mapping, the
 mandatory-filter rule, LinkedIn detection (including lookalike hosts like
 `notlinkedin.com`), pagination and the result cap, retry policy, and dedup.
 

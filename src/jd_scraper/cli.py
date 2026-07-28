@@ -13,6 +13,7 @@ from rich.markdown import Markdown
 from rich.table import Table
 
 from .client import OutOfCreditsError, TheirStackClient, TheirStackError, format_body
+from .runner import incremental_window, run_search
 from .config import load_settings
 from .export import write_csv, write_jsonl
 from .filters import MissingMandatoryFilterError, build_request_body, expand_queries
@@ -65,7 +66,7 @@ def search(
     prof = _load_profile(profile)
     cap = max_results if max_results is not None else prof.limit
 
-    discovered_since, exclude_ids = _incremental_window(prof, settings, disabled=full)
+    discovered_since, exclude_ids = incremental_window(prof, settings, disabled=full)
 
     if dry_run:
         variants = expand_queries(prof)
@@ -107,68 +108,21 @@ def search(
         raise typer.Exit(2)
 
     run_started = datetime.now(timezone.utc).isoformat()
+
     try:
-        body_for_log = build_request_body(
+        outcome = run_search(
             prof,
-            page=0,
-            page_size=min(prof.page_size, cap),
+            settings,
+            max_results=cap,
             preview=preview,
-            discovered_since=discovered_since,
-            exclude_ids=exclude_ids,
+            totals=totals,
+            full=full,
+            store_results=not no_store,
+            on_event=lambda message: console.print(f"[dim]{message}[/dim]"),
         )
     except MissingMandatoryFilterError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(2)
-
-    queries = expand_queries(prof)
-    if len(queries) > 1:
-        console.print(
-            f"[dim]Running {len(queries)} searches and merging: "
-            f"{', '.join(label for label, _ in queries)}. "
-            f"The API ANDs filters, so OR needs separate requests.[/dim]"
-        )
-
-    def _progress(page: int, count: int) -> None:
-        console.print(f"[dim]  page {page}: {count} results[/dim]")
-
-    jobs: list = []
-    seen_ids: set = set()
-    billed = 0
-    metadata: dict = {}
-
-    try:
-        with TheirStackClient(
-            api_key,
-            base_url=settings.theirstack_base_url,
-            timeout=settings.jd_timeout_seconds,
-        ) as client:
-            # Split the cap so one variant cannot starve the other.
-            share = max(1, cap // len(queries))
-            for index, (label, variant) in enumerate(queries):
-                # Give any remainder to the last variant.
-                budget = cap - (share * index) if index == len(queries) - 1 else share
-                if budget < 1:
-                    break
-                if label:
-                    console.print(f"[dim]{label} search (up to {budget}):[/dim]")
-
-                found, meta = client.search(
-                    variant,
-                    max_results=budget,
-                    preview=preview,
-                    include_total_results=totals,
-                    discovered_since=discovered_since,
-                    exclude_ids=exclude_ids,
-                    on_page=_progress,
-                )
-                billed += meta.get("billed_results", 0)
-                metadata = {**meta, **metadata}
-                for job in found:
-                    if job.id is not None and job.id in seen_ids:
-                        continue  # matched both searches; keep one copy
-                    if job.id is not None:
-                        seen_ids.add(job.id)
-                    jobs.append(job)
     except OutOfCreditsError as exc:
         console.print(f"[red]Out of credits:[/red] {exc}")
         console.print("[dim]Re-run with --preview for free, blurred results.[/dim]")
@@ -177,15 +131,16 @@ def search(
         console.print(f"[red]API call failed:[/red] {exc}")
         raise typer.Exit(1)
 
-    metadata["billed_results"] = billed
-    if preview:
-        console.print(f"[dim]Preview mode: {billed} blurred results, no credits used.[/dim]")
+    if outcome.preview:
+        console.print(
+            f"[dim]Preview mode: {outcome.billed} blurred results, no credits used.[/dim]"
+        )
     else:
-        console.print(f"[dim]{billed} jobs returned = {billed} credits used.[/dim]")
+        console.print(f"[dim]{outcome.billed} jobs returned = {outcome.billed} credits used.[/dim]")
 
     if prof.sources.linkedin_only:
-        discarded = billed - len(jobs)
-        note = f"LinkedIn-only filter kept {len(jobs)} of {billed}."
+        discarded = outcome.billed - len(outcome.jobs)
+        note = f"LinkedIn-only filter kept {len(outcome.jobs)} of {outcome.billed}."
         if discarded > 0:
             note += (
                 f" {discarded} non-LinkedIn result(s) still cost credits -- the"
@@ -193,41 +148,39 @@ def search(
             )
         console.print(f"[dim]{note}[/dim]")
 
-    truncated = metadata.get("truncated_results") or 0
-    if truncated:
+    if outcome.truncated:
         console.print(
-            f"[yellow]{truncated} further match(es) were withheld because the account "
-            f"lacks credits to fetch them.[/yellow]"
+            f"[yellow]{outcome.truncated} further match(es) were withheld because the "
+            f"account lacks credits to fetch them.[/yellow]"
         )
 
-    total_new = 0
     if not no_store:
         with Store(settings.jd_db_path) as store:
-            total, total_new = store.upsert_jobs(jobs, prof.name)
-            store.record_run(prof.name, body_for_log, total, total_new)
             rows = store.list_jobs(
-                limit=len(jobs) or 1,
+                limit=len(outcome.jobs) or 1,
                 profile=prof.name,
                 new_only_since=run_started if only_new else None,
             )
         _render(rows)
-        console.print(f"\n[green]{total} stored, {total_new} new.[/green]")
-        if metadata.get("total_results") is not None:
-            console.print(f"[dim]API reported total_results={metadata['total_results']}[/dim]")
+        console.print(f"\n[green]{outcome.stored} stored, {outcome.new} new.[/green]")
+        if outcome.metadata.get("total_results") is not None:
+            console.print(
+                f"[dim]API reported total_results={outcome.metadata['total_results']}[/dim]"
+            )
     else:
         table = Table(show_header=True, header_style="bold")
         for col in ("Title", "Company", "Location", "Posted", "URL"):
             table.add_column(col, overflow="fold")
-        for job in jobs:
+        for job in outcome.jobs:
             table.add_row(
                 job.job_title or "-",
-                job.company or "-",
+                job.company_name() or "-",
                 job.best_location() or "-",
                 job.date_posted or "-",
                 job.best_url() or "-",
             )
         console.print(table)
-        console.print(f"\n[green]{len(jobs)} results (not stored).[/green]")
+        console.print(f"\n[green]{len(outcome.jobs)} results (not stored).[/green]")
 
 
 @app.command("list")
@@ -337,7 +290,8 @@ def serve(
 ) -> None:
     """Browse and triage stored jobs in a local web UI.
 
-    Reads the database only -- it never calls TheirStack, so it cannot spend credits.
+    Browsing is read-only and free. The New search button can call TheirStack, but
+    defaults to preview mode and refuses an unconfirmed paid run.
     """
     import uvicorn
 
@@ -445,39 +399,6 @@ def _finish_profile(prof: SearchProfile, out_path: str) -> None:
         f"\n[dim]Run it with:[/dim] jd search --profile {written} --max-results 5"
         f"\n[dim]Revise it with:[/dim] jd profile edit {written}"
     )
-
-
-def _incremental_window(
-    prof: SearchProfile, settings, *, disabled: bool = False
-) -> tuple[str | None, list[int]]:
-    """Work out what this profile has already seen.
-
-    Returns (discovered_since, exclude_ids). The timestamp is rewound by the
-    profile's overlap so a posting discovered mid-run is not skipped; the id list
-    removes the duplicates that overlap would otherwise let back in.
-    """
-    if disabled or not prof.incremental:
-        return None, []
-
-    db_path = Path(settings.jd_db_path)
-    if not db_path.exists():
-        return None, []
-
-    with Store(db_path) as store:
-        last_run = store.last_run_at(prof.name)
-        if not last_run:
-            return None, []
-        try:
-            last = datetime.fromisoformat(last_run)
-        except ValueError:
-            return None, []
-        if last.tzinfo is None:
-            last = last.replace(tzinfo=timezone.utc)
-
-        since = last - timedelta(minutes=prof.incremental_overlap_minutes)
-        # The API documents discovered_at_* as UTC, so send a bare UTC timestamp.
-        stamp = since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S")
-        return stamp, store.known_job_ids(since=since.isoformat())
 
 
 def _print_body(

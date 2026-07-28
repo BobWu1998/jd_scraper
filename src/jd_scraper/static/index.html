@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>jd_scraper</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>%F0%9F%94%8D</text></svg>">
 <style>
   :root {
     --bg: #ffffff; --panel: #f7f7f8; --border: #e2e2e5; --text: #1a1a1c;
@@ -80,11 +81,80 @@
     padding: 10px 12px; border-radius: 6px; margin-bottom: 16px; color: var(--muted);
   }
   .saved { color: var(--applied); font-size: 12.5px; }
+
+  /* --- new search panel --- */
+  #newBtn {
+    background: var(--accent); color: #fff; border-color: var(--accent);
+    font-weight: 600; display: flex; align-items: center; gap: 6px; padding: 6px 11px;
+  }
+  #newBtn svg { width: 15px; height: 15px; }
+  dialog {
+    border: 1px solid var(--border); border-radius: 10px; padding: 0;
+    background: var(--bg); color: var(--text); width: min(760px, 94vw); max-height: 90vh;
+  }
+  dialog::backdrop { background: rgba(0,0,0,.45); }
+  .dlg-head {
+    padding: 14px 20px; border-bottom: 1px solid var(--border);
+    display: flex; align-items: center; gap: 10px;
+    position: sticky; top: 0; background: var(--bg);
+  }
+  .dlg-head h2 { margin: 0; font-size: 16px; flex: 1; }
+  .dlg-body { padding: 18px 20px; overflow-y: auto; max-height: calc(90vh - 132px); }
+  .dlg-foot {
+    padding: 12px 20px; border-top: 1px solid var(--border);
+    display: flex; gap: 10px; align-items: center; flex-wrap: wrap;
+    position: sticky; bottom: 0; background: var(--bg);
+  }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px 16px; }
+  @media (max-width: 620px) { .grid { grid-template-columns: 1fr; } }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field.wide { grid-column: 1 / -1; }
+  .field label { font-size: 12.5px; font-weight: 600; }
+  .field .hint { font-size: 11.5px; color: var(--muted); font-weight: 400; }
+  .field input, .field select { width: 100%; }
+  /* .field sets flex-direction:column, which would stack these vertically. */
+  .field.checks { flex-direction: row; gap: 20px; flex-wrap: wrap; align-items: center; }
+  .checks label {
+    display: flex; gap: 7px; align-items: baseline; font-size: 13px; font-weight: 400;
+  }
+  .checks label input { flex: none; width: auto; }
+  .checks .hint { white-space: nowrap; }
+  fieldset {
+    border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; margin: 0 0 14px;
+  }
+  legend { font-size: 12px; font-weight: 600; color: var(--muted); padding: 0 5px; }
+  .cost {
+    margin-left: auto; text-align: right; font-size: 13px; line-height: 1.35;
+  }
+  .cost strong { font-size: 15px; }
+  .free { color: var(--applied); }
+  .paid { color: var(--interviewing); }
+  .primary { background: var(--accent); color: #fff; border-color: var(--accent); font-weight: 600; }
+  .err {
+    background: #fee; border: 1px solid #f99; color: #900;
+    padding: 9px 12px; border-radius: 6px; margin-bottom: 12px; white-space: pre-wrap;
+  }
+  @media (prefers-color-scheme: dark) {
+    .err { background: #3b1a1a; border-color: #7a2a2a; color: #ffb4b4; }
+  }
+  pre.plan {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 6px;
+    padding: 10px; overflow-x: auto; font-size: 12px; margin: 8px 0 0;
+  }
+  details.plan-wrap summary { cursor: pointer; font-size: 13px; color: var(--muted); }
 </style>
 </head>
 <body>
 <header>
   <h1>jd_scraper</h1>
+  <button id="newBtn" title="Run a new search with your own filters">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"
+         stroke-linecap="round" aria-hidden="true">
+      <circle cx="11" cy="11" r="7"></circle><path d="M20 20l-3.5-3.5"></path>
+      <path d="M11 8v6M8 11h6"></path>
+    </svg>
+    New search
+  </button>
   <input id="q" type="search" placeholder="Search title, company, location, description…">
   <select id="status"><option value="">All statuses</option></select>
   <select id="profile"><option value="">All profiles</option></select>
@@ -100,6 +170,107 @@
   <div id="list"></div>
   <div id="detail"><p class="empty">Select a job to see the full description.</p></div>
 </main>
+
+<dialog id="dlg">
+  <form method="dialog" class="dlg-head">
+    <h2>New search</h2>
+    <button value="cancel">Close</button>
+  </form>
+  <div class="dlg-body">
+    <div id="dlgErr"></div>
+
+    <div class="field wide" style="margin-bottom:14px">
+      <label for="fromProfile">Start from a saved profile
+        <span class="hint">optional — prefills the form</span></label>
+      <select id="fromProfile"><option value="">Blank</option></select>
+    </div>
+
+    <fieldset>
+      <legend>What</legend>
+      <div class="grid">
+        <div class="field wide">
+          <label for="fTitles">Job titles
+            <span class="hint">comma separated · every word must appear, any order</span></label>
+          <input id="fTitles" placeholder="machine learning, computer vision">
+        </div>
+        <div class="field wide">
+          <label for="fTitlesNot">Exclude titles</label>
+          <input id="fTitlesNot" placeholder="intern, manager">
+        </div>
+        <div class="field">
+          <label for="fDesc">Description must contain
+            <span class="hint">whole words</span></label>
+          <input id="fDesc" placeholder="pytorch, ros">
+        </div>
+        <div class="field">
+          <label for="fSeniority">Seniority</label>
+          <select id="fSeniority" multiple size="5">
+            <option>junior</option><option>mid_level</option><option>senior</option>
+            <option>staff</option><option>c_level</option>
+          </select>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Where</legend>
+      <div class="grid">
+        <div class="field">
+          <label for="fCountries">Countries <span class="hint">ISO-2</span></label>
+          <input id="fCountries" placeholder="US">
+        </div>
+        <div class="field">
+          <label for="fLocations">Locations</label>
+          <input id="fLocations" placeholder="Atlanta, New York">
+        </div>
+        <div class="field wide checks">
+          <label><input type="checkbox" id="fIncludeRemote"> Also include remote jobs
+            <span class="hint">(runs a second search and merges)</span></label>
+          <label><input type="checkbox" id="fLinkedin" checked> LinkedIn only</label>
+        </div>
+      </div>
+    </fieldset>
+
+    <fieldset>
+      <legend>When &amp; how many</legend>
+      <div class="grid">
+        <div class="field">
+          <label for="fDays">Posted within days
+            <span class="hint">0 = today · required unless you filter by company</span></label>
+          <input id="fDays" type="number" min="0" value="5">
+        </div>
+        <div class="field">
+          <label for="fLimit">Max results <span class="hint">1 credit each</span></label>
+          <input id="fLimit" type="number" min="1" value="10">
+        </div>
+        <div class="field">
+          <label for="fName">Save as profile name
+            <span class="hint">tracks "what's new" separately</span></label>
+          <input id="fName" value="custom">
+        </div>
+        <div class="field">
+          <label for="fSalary">Min salary USD</label>
+          <input id="fSalary" type="number" min="0" placeholder="150000">
+        </div>
+        <div class="field wide checks">
+          <label><input type="checkbox" id="fPreview" checked>
+            <strong>Preview mode</strong> — blurred results, no credits</label>
+          <label><input type="checkbox" id="fFull"> Re-fetch jobs I already have</label>
+        </div>
+      </div>
+    </fieldset>
+
+    <details class="plan-wrap">
+      <summary>Show the exact request this will send</summary>
+      <pre class="plan" id="planOut">…</pre>
+    </details>
+  </div>
+  <div class="dlg-foot">
+    <button id="planBtn">Check</button>
+    <button id="runBtn" class="primary">Run search</button>
+    <span class="cost" id="cost"></span>
+  </div>
+</dialog>
 
 <script>
 const $ = (id) => document.getElementById(id);
@@ -206,6 +377,151 @@ async function selectJob(id) {
 let timer;
 $("q").oninput = () => { clearTimeout(timer); timer = setTimeout(loadJobs, 200); };
 ["status", "profile", "remote"].forEach((id) => ($(id).onchange = loadJobs));
+
+/* ---------- new search ---------- */
+
+const csv = (s) => s.split(",").map((x) => x.trim()).filter(Boolean);
+const multi = (el) => Array.from(el.selectedOptions).map((o) => o.value);
+let savedProfiles = [];
+
+function formToProfile() {
+  const p = {
+    name: $("fName").value.trim() || "custom",
+    titles: csv($("fTitles").value),
+    title_exclude: csv($("fTitlesNot").value),
+    description_contains: csv($("fDesc").value),
+    seniority: multi($("fSeniority")),
+    locations: { countries: csv($("fCountries").value), patterns: csv($("fLocations").value) },
+    include_remote: $("fIncludeRemote").checked,
+    sources: { linkedin_only: $("fLinkedin").checked },
+    limit: Math.max(1, parseInt($("fLimit").value || "10", 10)),
+    preview: $("fPreview").checked,
+  };
+  p.page_size = Math.min(25, p.limit);
+  const days = $("fDays").value.trim();
+  if (days !== "") p.posted_within_days = parseInt(days, 10);
+  const salary = $("fSalary").value.trim();
+  if (salary !== "") p.min_salary_usd = parseInt(salary, 10);
+  return p;
+}
+
+function fillForm(p) {
+  $("fName").value = p.name || "custom";
+  $("fTitles").value = (p.titles || []).join(", ");
+  $("fTitlesNot").value = (p.title_exclude || []).join(", ");
+  $("fDesc").value = (p.description_contains || []).join(", ");
+  $("fCountries").value = ((p.locations || {}).countries || []).join(", ");
+  $("fLocations").value = ((p.locations || {}).patterns || []).join(", ");
+  $("fIncludeRemote").checked = !!p.include_remote;
+  $("fLinkedin").checked = (p.sources || {}).linkedin_only !== false;
+  $("fDays").value = p.posted_within_days ?? "";
+  $("fLimit").value = p.limit ?? 10;
+  $("fSalary").value = p.min_salary_usd ?? "";
+  $("fPreview").checked = !!p.preview;
+  Array.from($("fSeniority").options).forEach(
+    (o) => (o.selected = (p.seniority || []).includes(o.value)));
+  updateCost();
+}
+
+function updateCost() {
+  const n = Math.max(1, parseInt($("fLimit").value || "10", 10));
+  $("cost").innerHTML = $("fPreview").checked
+    ? `<strong class="free">Free</strong><br><span class="hint">preview — blurred, no credits</span>`
+    : `<strong class="paid">Up to ${n} credit${n === 1 ? "" : "s"}</strong><br>
+       <span class="hint">1 per job returned</span>`;
+}
+
+function showErr(msg) {
+  $("dlgErr").innerHTML = msg ? `<div class="err">${esc(msg)}</div>` : "";
+}
+
+async function post(url, body) {
+  const res = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  return { ok: res.ok, status: res.status, data };
+}
+
+async function checkPlan() {
+  showErr("");
+  const { ok, data } = await post("/api/search/plan", {
+    profile: formToProfile(), full: $("fFull").checked,
+  });
+  if (!ok) { showErr(data.detail || "Could not build this search."); return null; }
+  $("planOut").textContent = JSON.stringify(data.queries, null, 2);
+  const notes = [];
+  if (data.queries.length > 1)
+    notes.push(`${data.queries.length} searches will run and be merged`);
+  if (data.discovered_since)
+    notes.push(`only jobs found since ${data.discovered_since}`);
+  if (data.excluded_ids) notes.push(`${data.excluded_ids} known job(s) excluded`);
+  if (notes.length) showErr("");
+  $("planOut").textContent =
+    (notes.length ? "// " + notes.join(" · ") + "\n" : "") +
+    JSON.stringify(data.queries, null, 2);
+  document.querySelector("details.plan-wrap").open = true;
+  return data;
+}
+
+async function runSearch() {
+  showErr("");
+  const profile = formToProfile();
+  const cap = profile.limit;
+
+  if (!profile.preview) {
+    const yes = confirm(
+      `This will return up to ${cap} jobs and cost up to ${cap} credits.\n\n` +
+      `Turn on preview mode for blurred results at no cost.\n\nRun it?`);
+    if (!yes) return;
+  }
+
+  $("runBtn").disabled = true;
+  $("runBtn").textContent = "Searching…";
+  const { ok, data } = await post("/api/search/run", {
+    profile, full: $("fFull").checked, confirm: true,
+  });
+  $("runBtn").disabled = false;
+  $("runBtn").textContent = "Run search";
+
+  if (!ok) { showErr(data.detail || "Search failed."); return; }
+
+  const bits = [
+    `${data.stored} stored, ${data.new} new`,
+    data.preview ? "preview — no credits used" : `${data.credits_used} credit(s) used`,
+  ];
+  if (data.truncated) bits.push(`${data.truncated} withheld for lack of credits`);
+  showErr("");
+  $("planOut").textContent = bits.join(" · ");
+  document.querySelector("details.plan-wrap").open = true;
+
+  await loadMeta();
+  $("profile").value = profile.name;
+  await loadJobs();
+}
+
+$("newBtn").onclick = async () => {
+  showErr("");
+  $("planOut").textContent = "…";
+  if (!savedProfiles.length) {
+    const data = await (await fetch("/api/profiles")).json();
+    savedProfiles = (data.profiles || []).filter((p) => p.profile);
+    $("fromProfile").innerHTML = '<option value="">Blank</option>' +
+      savedProfiles.map((p, i) => `<option value="${i}">${esc(p.name)}</option>`).join("");
+  }
+  updateCost();
+  $("dlg").showModal();
+};
+$("fromProfile").onchange = (e) => {
+  const p = savedProfiles[e.target.value];
+  if (p) fillForm(p.profile);
+};
+$("fLimit").oninput = updateCost;
+$("fPreview").onchange = updateCost;
+$("planBtn").onclick = (e) => { e.preventDefault(); checkPlan(); };
+$("runBtn").onclick = (e) => { e.preventDefault(); runSearch(); };
 
 loadMeta().then(loadJobs);
 </script>

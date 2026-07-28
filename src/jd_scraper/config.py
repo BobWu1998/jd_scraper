@@ -24,6 +24,12 @@ class Settings(BaseSettings):
     # since TheirStack bills per job returned.
     jd_confirm_threshold: int = 100
 
+    jd_profiles_dir: Path = Path("profiles")
+
+    # Absolute ceiling on a search started from the web UI. A stray click or a
+    # malformed request must not be able to spend an unbounded number of credits.
+    jd_web_max_results: int = 100
+
     def require_api_key(self) -> str:
         if not self.theirstack_api_key:
             raise RuntimeError(
