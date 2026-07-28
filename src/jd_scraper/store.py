@@ -21,6 +21,10 @@ CREATE TABLE IF NOT EXISTS jobs (
   job_title TEXT,
   company TEXT,
   url TEXT,
+  final_url TEXT,
+  description TEXT,
+  salary_string TEXT,
+  easy_apply INTEGER,
   source TEXT,
   location TEXT,
   country_code TEXT,
@@ -59,7 +63,51 @@ class Store:
         self.conn = sqlite3.connect(self.path)
         self.conn.row_factory = sqlite3.Row
         self.conn.executescript(SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    # Columns added after the first release. Existing databases get them via
+    # ALTER TABLE, then backfilled from the stored raw payload -- which is exactly
+    # why the full response is kept, so widening the schema never costs credits.
+    _ADDED_COLUMNS = (
+        ("final_url", "TEXT", "$.final_url"),
+        ("description", "TEXT", "$.description"),
+        ("salary_string", "TEXT", "$.salary_string"),
+        ("easy_apply", "INTEGER", "$.easy_apply"),
+    )
+
+    def _migrate(self) -> None:
+        existing = {row[1] for row in self.conn.execute("PRAGMA table_info(jobs)")}
+        added = [c for c in self._ADDED_COLUMNS if c[0] not in existing]
+        for name, decl, _ in added:
+            self.conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {decl}")
+        if added:
+            self.backfill_from_raw([c[0] for c in added])
+
+    def backfill_from_raw(self, columns: list[str] | None = None) -> int:
+        """Populate columns from the stored raw JSON. Returns rows touched.
+
+        Needs SQLite's JSON1 extension; if it is unavailable the rows simply stay
+        null and future searches fill them in, so this is best-effort.
+        """
+        wanted = {c[0]: c[2] for c in self._ADDED_COLUMNS}
+        targets = columns or list(wanted)
+        touched = 0
+        for name in targets:
+            path = wanted.get(name)
+            if not path:
+                continue
+            try:
+                cursor = self.conn.execute(
+                    f"UPDATE jobs SET {name} = json_extract(raw, ?) "
+                    f"WHERE {name} IS NULL AND raw IS NOT NULL",
+                    (path,),
+                )
+                touched += cursor.rowcount or 0
+            except sqlite3.OperationalError:
+                return touched
+        self.conn.commit()
+        return touched
 
     def __enter__(self) -> Store:
         return self
@@ -92,14 +140,19 @@ class Store:
             self.conn.execute(
                 """
                 INSERT INTO jobs (
-                  id, job_title, company, url, source, location, country_code, remote,
+                  id, job_title, company, url, final_url, description, salary_string,
+                  easy_apply, source, location, country_code, remote,
                   date_posted, discovered_at, min_salary_usd, max_salary_usd, seniority,
                   profile, first_seen_at, raw
-                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                 ON CONFLICT(id) DO UPDATE SET
                   job_title = excluded.job_title,
                   company = excluded.company,
                   url = excluded.url,
+                  final_url = excluded.final_url,
+                  description = excluded.description,
+                  salary_string = excluded.salary_string,
+                  easy_apply = excluded.easy_apply,
                   source = excluded.source,
                   location = excluded.location,
                   country_code = excluded.country_code,
@@ -116,6 +169,10 @@ class Store:
                     job.job_title,
                     job.company_name(),
                     job.best_url(),
+                    job.final_url,
+                    job.description,
+                    job.salary_string,
+                    int(job.easy_apply) if job.easy_apply is not None else None,
                     domain_of(job.best_url()),
                     job.best_location(),
                     job.country_code,
@@ -178,6 +235,11 @@ class Store:
             f"SELECT * FROM jobs {where} ORDER BY date_posted DESC, first_seen_at DESC LIMIT ?",
             params,
         ).fetchall()
+
+    def get_job(self, job_id: str) -> sqlite3.Row | None:
+        return self.conn.execute(
+            "SELECT * FROM jobs WHERE id = ?", (str(job_id),)
+        ).fetchone()
 
     def count(self) -> int:
         return self.conn.execute("SELECT COUNT(*) FROM jobs").fetchone()[0]

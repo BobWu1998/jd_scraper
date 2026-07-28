@@ -138,8 +138,9 @@ uv run jd search --profile profiles/example.yml --max-results 5
 # Re-run: should report 0 new.
 uv run jd search --profile profiles/example.yml --max-results 5
 
-# Browse and export.
+# Browse, read one in full, and export.
 uv run jd list --limit 20
+uv run jd show 1234567                 # links + complete description
 uv run jd export --format csv --out exports/jobs.csv
 uv run jd export --format jsonl --out exports/jobs.jsonl   # full raw payloads
 ```
@@ -149,6 +150,37 @@ counts — slower, it reads the whole dataset), `--yes`.
 
 `jd probe` captures the live OpenAPI spec and a 1-result sample response to
 `docs/api-snapshot.json` — useful if the API changes under you.
+
+## Descriptions and application links
+
+Both arrive in the search response — no second request, no extra credits. Each posting
+carries two links:
+
+- **`url`** — the job board posting (LinkedIn, given `linkedin_only`). This is the apply link.
+- **`final_url`** — the same job on the company's own careers page, usually a direct ATS
+  application. Not always present.
+
+Read one in full:
+
+```bash
+uv run jd show 1234567              # markdown description, rendered
+uv run jd show 1234567 --links-only
+```
+
+Descriptions are long, so CSV omits them unless asked:
+
+```bash
+uv run jd export --format csv --out jobs.csv --with-description
+uv run jd export --format jsonl --out jobs.jsonl   # always includes everything
+```
+
+**Preview mode blurs descriptions and URLs.** That's the deal that makes it free — so a
+profile with `preview: true` gives you titles, locations and dates you can filter on, but
+not readable descriptions or working links. Set `preview: false` and re-run to get them.
+
+Rows saved before these columns existed are **backfilled from the stored raw payload**
+the first time the database is opened by a newer version — no re-fetch, no credits. That
+is why the full response is kept in the `raw` column.
 
 ## Search profiles
 

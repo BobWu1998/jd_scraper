@@ -9,6 +9,7 @@ from typing import Optional
 
 import typer
 from rich.console import Console
+from rich.markdown import Markdown
 from rich.table import Table
 
 from .client import OutOfCreditsError, TheirStackClient, TheirStackError, format_body
@@ -245,11 +246,71 @@ def list_jobs(
 
 
 @app.command()
+def show(
+    job_id: str = typer.Argument(..., help="Job id, as shown by `jd list`."),
+    links_only: bool = typer.Option(False, "--links-only", help="Skip the description."),
+) -> None:
+    """Show one job in full: links, salary, and the complete description."""
+    settings = load_settings()
+    with Store(settings.jd_db_path) as store:
+        row = store.get_job(job_id)
+
+    if row is None:
+        console.print(f"[red]No job with id {job_id} in {settings.jd_db_path}[/red]")
+        raise typer.Exit(1)
+
+    console.print(f"\n[bold]{row['job_title'] or '(no title)'}[/bold]")
+    console.print(f"[dim]{row['company'] or '-'} — {row['location'] or '-'}[/dim]")
+
+    facts = [f"Posted: {row['date_posted'] or '-'}"]
+    if row["seniority"]:
+        facts.append(f"Seniority: {row['seniority']}")
+    if _col(row, "salary_string"):
+        facts.append(f"Salary: {row['salary_string']}")
+    if row["remote"] is not None:
+        facts.append("Remote" if row["remote"] else "On-site")
+    console.print("[dim]" + " · ".join(facts) + "[/dim]")
+
+    console.print(f"\n[bold cyan]Apply:[/bold cyan] {row['url'] or '-'}")
+    if _col(row, "final_url"):
+        # The company's own posting, usually a direct ATS application.
+        console.print(f"[bold cyan]Company page:[/bold cyan] {row['final_url']}")
+
+    if links_only:
+        return
+
+    description = _col(row, "description")
+    if not description:
+        console.print(
+            "\n[yellow]No description stored for this job.[/yellow]\n"
+            "[dim]Descriptions are blurred in preview mode and omitted from rows saved "
+            "before this column existed. Re-run the search with preview off.[/dim]"
+        )
+        return
+
+    console.print("\n[bold]Description[/bold]")
+    console.print(Markdown(description))
+
+
+def _col(row, name: str):
+    """Read a column that may not exist in an older database."""
+    try:
+        return row[name]
+    except (IndexError, KeyError):
+        return None
+
+
+@app.command()
 def export(
     out: str = typer.Option(..., "--out", "-o", help="Output file path."),
     fmt: str = typer.Option("csv", "--format", "-f", help="csv or jsonl."),
     limit: int = typer.Option(10_000, "--limit", "-n"),
     since_days: Optional[int] = typer.Option(None, "--since-days", "-s"),
+    with_description: bool = typer.Option(
+        False,
+        "--with-description",
+        help="Include the full description column in CSV. Long; jsonl always has it.",
+    ),
 ) -> None:
     """Export stored jobs to CSV or JSONL."""
     if fmt not in {"csv", "jsonl"}:
@@ -260,7 +321,11 @@ def export(
     with Store(settings.jd_db_path) as store:
         rows = store.list_jobs(limit=limit, since_days=since_days)
 
-    written = write_csv(rows, out) if fmt == "csv" else write_jsonl(rows, out)
+    written = (
+        write_csv(rows, out, with_description=with_description)
+        if fmt == "csv"
+        else write_jsonl(rows, out)
+    )
     console.print(f"[green]Wrote {written} rows to {out}[/green]")
 
 
